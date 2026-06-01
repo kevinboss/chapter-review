@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "base": "main",
+  "head": "feat/auth-rewrite",
+  "mergeBase": "a1b2c3d4",
+  "generatedAt": "2026-06-01T12:00:00Z",
+  "summary": "Replace session-token middleware; add OIDC provider.",
+  "chapters": [
+    {
+      "id": "ch-1",
+      "title": "Remove legacy session middleware",
+      "description": "Strips the middleware legal flagged for non-compliant token storage.",
+      "files": [
+        { "path": "src/middleware/session.ts", "status": "deleted" },
+        {
+          "path": "src/server.ts",
+          "status": "modified",
+          "hunks": [
+            { "oldStart": 12, "oldLines": 4, "newStart": 12, "newLines": 0 }
+          ],
+          "note": "Unwires the old middleware from the request pipeline."
+        }
+      ]
+    },
+    {
+      "id": "ch-2",
+      "title": "Add OIDC provider",
+      "files": [
+        { "path": "src/auth/oidc.ts", "status": "added" },
+        {
+          "path": "src/server.ts",
+          "status": "modified",
+          "hunks": [
+            { "oldStart": 30, "oldLines": 0, "newStart": 30, "newLines": 24 }
+          ]
+        }
+      ]
+    }
+  ],
+  "unassigned": [
+    { "path": "package-lock.json", "status": "modified", "reason": "generated" }
+  ]
+}
