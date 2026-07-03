@@ -18,8 +18,8 @@ Partition the current branch's diff into logical chapters and write `.claude/cha
 4. **Quarantine noise.** Lockfiles, snapshot updates, generated code, pure autoformat hunks → `unassigned` with a short `reason`. Don't force these into thematic chapters.
 
 5. **Validate the partition before writing.**
-   - `⋃(chapter hunks) ∪ unassigned == full diff`
-   - No hunk appears twice
+   - Completeness: `⋃(chapter hunks) ∪ unassigned == full diff`. Check this yourself against the parsed diff — the validator can't see the repo.
+   - Structure and disjointness: run `node scripts/validate.mjs <file>` (from the claude-chapter-review repo) on the candidate JSON. It checks the schema plus: no hunk claimed twice, no overlapping hunk ranges, no whole-file claim next to another claim, consistent status per path.
    - If validation fails, fix and re-validate. Do not write a broken file.
 
 6. **Order chapters as a review flow.** Usually: removals/refactors → new functionality → tests → docs. The order *is* the narrative.
@@ -35,7 +35,11 @@ Partition the current branch's diff into logical chapters and write `.claude/cha
 
 ## Schema
 
-See `example-chapters.json` in the repo root for a worked example. A formal JSON Schema (draft-07) is TBD.
+The contract is `schema/chapters.schema.json` (draft-07); `example-chapters.json` in the repo root is a worked example. Key semantics beyond the obvious:
+
+- A file entry **without** `hunks` claims the file's entire diff (typical for added/deleted files). With `hunks`, only those ranges are claimed and the file may appear in other chapters with disjoint hunks.
+- `unassigned` entries require a `reason` and are always present as an array, even when empty.
+- `version` is `1`; consumers reject unknown versions.
 
 ## Known limitations
 

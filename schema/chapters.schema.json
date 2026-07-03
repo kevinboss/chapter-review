@@ -1,0 +1,142 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/claude-chapter-review/main/schema/chapters.schema.json",
+  "title": "Chapter review manifest",
+  "description": "Partition of a branch diff into logical review chapters. Written by the chapter-review skill to .claude/chapters.json, consumed by the chapter-review VSCode extension. Structural rules only; the partition rules (every hunk in exactly one chapter or unassigned, no overlaps) are enforced by scripts/validate.mjs.",
+  "type": "object",
+  "required": ["version", "base", "head", "mergeBase", "generatedAt", "chapters", "unassigned"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Contract version. Consumers must reject manifests with a version they don't know."
+    },
+    "base": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Ref the branch is reviewed against, usually the default branch."
+    },
+    "head": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The branch under review."
+    },
+    "mergeBase": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "git merge-base <base> <head> at generation time. The diff that was partitioned is mergeBase..head."
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp of generation."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One or two sentences on what the branch does overall. Optional."
+    },
+    "chapters": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/chapter" }
+    },
+    "unassigned": {
+      "type": "array",
+      "description": "Quarantined noise: lockfiles, snapshots, generated code, pure autoformat hunks. Always present, may be empty.",
+      "items": { "$ref": "#/definitions/unassignedFile" }
+    }
+  },
+  "definitions": {
+    "chapter": {
+      "type": "object",
+      "required": ["id", "title", "files"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^ch-[0-9]+$",
+          "description": "Positional ID, stable within one generation only."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Imperative, e.g. \"Add OIDC provider\"."
+        },
+        "description": {
+          "type": "string",
+          "description": "Only when the why isn't obvious from the title."
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/file" }
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "required": ["path", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "$ref": "#/definitions/path" },
+        "oldPath": {
+          "$ref": "#/definitions/path",
+          "description": "Pre-rename path. Only meaningful with status \"renamed\"."
+        },
+        "status": { "$ref": "#/definitions/status" },
+        "hunks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/hunk" },
+          "description": "Omitted = the file's entire diff belongs to this entry (typical for added/deleted files). Present = only these hunks belong here; the file may then appear in other chapters with disjoint hunks."
+        },
+        "note": {
+          "type": "string",
+          "description": "Role of this file in this chapter. Only when the file appears in multiple chapters."
+        }
+      }
+    },
+    "unassignedFile": {
+      "type": "object",
+      "required": ["path", "status", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "$ref": "#/definitions/path" },
+        "oldPath": { "$ref": "#/definitions/path" },
+        "status": { "$ref": "#/definitions/status" },
+        "hunks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/hunk" },
+          "description": "Omitted = whole file is unassigned. Present = only these hunks (e.g. autoformat noise in an otherwise meaningful file)."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Why this was quarantined, e.g. \"generated\", \"snapshot\", \"autoformat\"."
+        }
+      }
+    },
+    "status": {
+      "enum": ["added", "modified", "deleted", "renamed"]
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/]",
+      "description": "Repo-relative POSIX path, no leading slash."
+    },
+    "hunk": {
+      "type": "object",
+      "description": "Coordinates from a unified diff @@ -oldStart,oldLines +newStart,newLines @@ header.",
+      "required": ["oldStart", "oldLines", "newStart", "newLines"],
+      "additionalProperties": false,
+      "properties": {
+        "oldStart": { "type": "integer", "minimum": 0 },
+        "oldLines": { "type": "integer", "minimum": 0 },
+        "newStart": { "type": "integer", "minimum": 0 },
+        "newLines": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

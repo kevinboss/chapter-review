@@ -2,12 +2,14 @@
 
 Tooling to review a git branch as a series of logical *chapters* instead of one undifferentiated diff.
 
-Two pieces:
+Pieces:
 
-- **`skill/`** — Claude Code skill that partitions the current branch's diff into chapters and writes `.claude/chapters.json` in the target repo.
+- **`schema/`** — the contract: a draft-07 JSON Schema for `chapters.json`. [`example-chapters.json`](./example-chapters.json) is a worked example.
+- **`scripts/`** — `validate.mjs` checks a manifest against the schema plus the partition rules (no hunk claimed twice, no overlaps, no double whole-file claims). `test.mjs` regression-tests the validator. Run both with `npm test`.
+- **`skill/`** — Claude Code skill that partitions the current branch's diff into chapters and writes `.claude/chapters.json` in the target repo, using `validate.mjs` as its pre-write check.
 - **`extension/`** — VSCode extension that renders `chapters.json` as a tree (list + tree views), opens diffs on click in the same style as the native git history, and tracks review progress per hunk.
 
-The contract between them is the JSON schema sketched in [`example-chapters.json`](./example-chapters.json). Q&A about the branch still happens in the Claude Code terminal — the extension is purely a review surface.
+Q&A about the branch still happens in the Claude Code terminal — the extension is purely a review surface.
 
 ## Design decisions so far
 
@@ -18,4 +20,4 @@ The contract between them is the JSON schema sketched in [`example-chapters.json
 
 ## Status
 
-Sketches only. No skill loader wired up, no extension scaffolded yet.
+Schema and validator done (`npm test`). No skill loader wired up, no extension scaffolded yet.
