@@ -1,0 +1,103 @@
+{
+  "name": "chapter-review",
+  "displayName": "Chapter Review",
+  "description": "Review a branch as logical chapters from .claude/chapters.json",
+  "version": "0.0.1",
+  "publisher": "kms",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "activationEvents": [
+    "workspaceContains:.git"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "views": {
+      "scm": [
+        {
+          "id": "chapterReview",
+          "name": "Chapters",
+          "contextualTitle": "Chapter Review"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "chapterReview",
+        "contents": "No chapter manifest found (.git/chapter-review/chapters.json).\nGenerate one with the chapter-review skill in Claude Code, then this view renders the branch as reviewable chapters."
+      }
+    ],
+    "commands": [
+      {
+        "command": "chapterReview.refresh",
+        "title": "Refresh",
+        "category": "Chapter Review",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "chapterReview.viewAsTree",
+        "title": "View as Tree",
+        "category": "Chapter Review",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "chapterReview.viewAsList",
+        "title": "View as List",
+        "category": "Chapter Review",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "chapterReview.openDiff",
+        "title": "Open Diff",
+        "category": "Chapter Review"
+      },
+      {
+        "command": "chapterReview.resetProgress",
+        "title": "Reset Review Progress",
+        "category": "Chapter Review"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "chapterReview.viewAsTree",
+          "when": "view == chapterReview && chapterReview.viewMode == list",
+          "group": "navigation@1"
+        },
+        {
+          "command": "chapterReview.viewAsList",
+          "when": "view == chapterReview && chapterReview.viewMode == tree",
+          "group": "navigation@1"
+        },
+        {
+          "command": "chapterReview.refresh",
+          "when": "view == chapterReview",
+          "group": "navigation@2"
+        },
+        {
+          "command": "chapterReview.resetProgress",
+          "when": "view == chapterReview"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "chapterReview.openDiff",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.0"
+  }
+}
