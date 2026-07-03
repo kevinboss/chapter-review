@@ -5,7 +5,7 @@ description: Group the current branch's changes into logical "chapters" for revi
 
 # Chapter review
 
-Partition the current branch's diff into logical chapters and write the manifest to `$(git rev-parse --git-dir)/chapter-review/chapters.json`, conforming to `schema/chapters.schema.json` (authoritative — `example-chapters.json` is only a worked illustration; when in doubt the schema and validator win). Every hunk must end up in exactly one chapter — or in `unassigned`. The manifest lives inside the git dir on purpose: it is tool state, invisible to `git status`, and no user-owned file (worktree, `.gitignore`, `.git/info/exclude`) gets touched.
+Partition the current branch's diff into logical chapters and write the manifest to `$(git rev-parse --git-dir)/chapter-review/chapters.json`. The contract is `validate.mjs` (authoritative) and `chapters.schema.json` (the same rules as JSON Schema), both next to this file; `example-chapters.json` next to them is a worked illustration. Every hunk must end up in exactly one chapter — or in `unassigned`. The manifest lives inside the git dir on purpose: it is tool state, invisible to `git status`, and no user-owned file (worktree, `.gitignore`, `.git/info/exclude`) gets touched.
 
 ## Steps
 
@@ -26,7 +26,7 @@ Partition the current branch's diff into logical chapters and write the manifest
 
 5. **Validate the partition before writing.**
    - Completeness: `⋃(chapter hunks) ∪ unassigned == full diff`. Check this yourself against the parsed diff — the validator can't see the repo.
-   - Structure and disjointness: run the validator on the candidate JSON. It lives in the tooling repo this skill ships in — resolve it relative to this SKILL.md file: `<dir of this file>/../../../scripts/validate.mjs` (the target repo's cwd won't have it). It checks the schema plus: no hunk claimed twice, no overlapping hunk ranges, no whole-file claim next to another claim, consistent status per path.
+   - Structure and disjointness: run `node validate.mjs <candidate.json>` where `validate.mjs` sits next to this SKILL.md (zero dependencies, just needs Node — resolve it relative to this file, not the target repo's cwd). It checks the schema plus: no hunk claimed twice, no overlapping hunk ranges, no whole-file claim next to another claim, consistent status per path.
    - If validation fails, fix and re-validate. Do not write a broken file.
 
 6. **Order chapters as a review flow.** The order *is* the narrative: at every chapter the reviewer should know why they're looking at it. Core change first — the thing the branch exists for, with a preceding removal only when it motivates what follows. Independent side changes (mechanical renames, opportunistic refactors) come after the core story, not before it; leading with a trivial rename buries the plot. Then tests, then docs/chores.
@@ -44,13 +44,17 @@ Partition the current branch's diff into logical chapters and write the manifest
 
 ## Schema
 
-The contract is `schema/chapters.schema.json` (draft-07) and the worked example is `example-chapters.json` — both in the tooling repo's root, `<dir of this file>/../../../`, not in the repo under review. Key semantics beyond the obvious:
+The contract is `chapters.schema.json` (draft-07) and the worked example is `example-chapters.json`, both next to this SKILL.md. `validate.mjs` (also here) enforces it and is authoritative if the two ever disagree. Key semantics beyond the obvious:
 
 - A file entry **without** `hunks` claims the file's entire diff (typical for added/deleted files). With `hunks`, only those ranges are claimed and the file may appear in other chapters with disjoint hunks.
 - Splitting a file between a chapter and `unassigned` is normal (e.g. one real hunk plus one autoformat hunk); the disjointness rules are the same. In that case give the chapter-side entry a `note`; the unassigned side carries only its `reason` (the schema forbids `note` there).
 - A renamed file's content hunks are absorbed by its whole-file claim; enumerate them only if they must split across chapters, then treat it like any modified file (with `oldPath` set).
 - `unassigned` entries require a `reason` and are always present as an array, even when empty.
 - `version` is `1`; consumers reject unknown versions.
+
+## Installing in another repo
+
+This skill directory is self-contained: `SKILL.md`, `validate.mjs`, `chapters.schema.json`, `example-chapters.json`. Copy the whole `chapter-review/` folder into that repo's `.claude/skills/`. Requirements are only `git` and `node` on PATH — no `npm install`, no dependencies. Pair it with the chapter-review VSCode extension to review the generated manifest.
 
 ## Known limitations
 

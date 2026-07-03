@@ -14,11 +14,11 @@ End-to-end demo: fresh demo repo → skill-generated manifest → extension dev 
 2. **Generate the manifest in a sub-agent.** Spawn a general-purpose sub-agent with `model: opus` (deliberate: matches what most devs run, so demo output reflects real-world skill quality) so the diff and JSON never enter the main context. Instruct it to:
    - Overwrite any existing `demo/.git/chapter-review/chapters.json` without reading it first — a previous run must not anchor the partition.
    - Follow `.claude/skills/chapter-review/SKILL.md` literally against the `demo/` repo (default branch `main`, no origin remote).
-   - Read `schema/chapters.schema.json` for field semantics before writing.
-   - Write `demo/.git/chapter-review/chapters.json` and run `node scripts/validate.mjs demo/.git/chapter-review/chapters.json` until it passes.
+   - Read `.claude/skills/chapter-review/chapters.schema.json` for field semantics before writing.
+   - Write `demo/.git/chapter-review/chapters.json` and run `node .claude/skills/chapter-review/validate.mjs demo/.git/chapter-review/chapters.json` until it passes.
    - Return only: the skill's one-line summary, the chapter list (id, title, file count), unassigned entries with reasons, and a FRICTION section listing anything ambiguous or wrong in the skill instructions (or "none"). No diff, no JSON, in the reply.
 
-3. **Verify from the outside.** Run `node scripts/validate.mjs demo/.git/chapter-review/chapters.json` yourself; do not trust the sub-agent's claim alone.
+3. **Verify from the outside.** Run `node .claude/skills/chapter-review/validate.mjs demo/.git/chapter-review/chapters.json` yourself; do not trust the sub-agent's claim alone.
 
 4. **Launch the dev host.** `code --new-window --extensionDevelopmentPath="<repo-root>/extension" "<repo-root>/demo"` (compile first via `npm run compile` in `extension/` if `extension/out/extension.js` is missing). Tell the user: Source Control side bar → "Chapters" view.
 

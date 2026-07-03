@@ -6,11 +6,17 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { validateManifest } from "./validate.mjs";
+import { validateManifest } from "../.claude/skills/chapter-review/validate.mjs";
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const skillDir = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  ".claude",
+  "skills",
+  "chapter-review"
+);
 const example = JSON.parse(
-  readFileSync(path.join(root, "example-chapters.json"), "utf8")
+  readFileSync(path.join(skillDir, "example-chapters.json"), "utf8")
 );
 
 const cases = [

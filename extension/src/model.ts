@@ -1,4 +1,4 @@
-// TypeScript mirror of schema/chapters.schema.json (contract version 1).
+// TypeScript mirror of .claude/skills/chapter-review/chapters.schema.json (contract version 1).
 
 export interface Hunk {
   oldStart: number;
@@ -47,7 +47,7 @@ export interface Manifest {
 
 /**
  * Shape check, not full schema validation (that happens at generation time
- * via scripts/validate.mjs). Enough to fail loudly on wrong versions or
+ * via the skill's validate.mjs). Enough to fail loudly on wrong versions or
  * truncated files instead of rendering garbage.
  */
 export function parseManifest(text: string): Manifest {
