@@ -137,7 +137,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (result.ok) {
     const s = result.stats;
     console.log(
-      `OK: ${target} — ${s.chapters} chapters, ${s.files} files, ${s.hunks} hunk claims`
+      `OK: ${target} — ${s.chapters} chapters, ${s.files} files, ${s.hunks} claims (a whole-file claim counts once, regardless of its hunk count)`
     );
   } else {
     console.error(`INVALID: ${target}`);
