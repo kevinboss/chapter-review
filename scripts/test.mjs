@@ -73,6 +73,26 @@ const cases = [
     mutate: (m) => (m.chapters[1].id = "ch-1"),
     expectError: "duplicate chapter id",
   },
+  {
+    name: "issue with unknown severity",
+    mutate: (m) => (m.issues[0].severity = "blocker"),
+    expectError: "schema:",
+  },
+  {
+    name: "issue missing note",
+    mutate: (m) => delete m.issues[0].note,
+    expectError: "note",
+  },
+  {
+    name: "duplicate issue id",
+    mutate: (m) => m.issues.push({ ...m.issues[0] }),
+    expectError: "duplicate issue id",
+  },
+  {
+    name: "issue with unknown field",
+    mutate: (m) => (m.issues[0].author = "me"),
+    expectError: "unknown property",
+  },
 ];
 
 let failed = 0;

@@ -20,7 +20,7 @@ End-to-end demo: fresh demo repo → skill-generated manifest → extension dev 
 
 3. **Verify from the outside.** Run `node .claude/skills/chapter-review/validate.mjs demo/.git/chapter-review/chapters.json` yourself; do not trust the sub-agent's claim alone.
 
-4. **Launch the dev host.** `code --new-window --extensionDevelopmentPath="<repo-root>/extension" "<repo-root>/demo"` (compile first via `npm run compile` in `extension/` if `extension/out/extension.js` is missing). Tell the user: Source Control side bar → "Chapters" view.
+4. **Launch the dev host.** `code --new-window --extensionDevelopmentPath="<repo-root>/extension" "<repo-root>/demo"` (build first via `npm run build` in `extension/` if `extension/out/extension.js` or `extension/skill/` is missing). Tell the user: click the "Chapter Review" icon in the activity bar → "Chapters" view.
 
 5. **Report.** Relay the chapter list and any FRICTION findings — those drive edits to the chapter-review skill. If the run surfaced skill-prompt gaps, propose the fix instead of just noting it.
 

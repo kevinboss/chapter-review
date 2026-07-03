@@ -40,5 +40,16 @@
   ],
   "unassigned": [
     { "path": "package-lock.json", "status": "modified", "reason": "generated" }
+  ],
+  "issues": [
+    {
+      "id": "iss-1",
+      "path": "src/auth/oidc.ts",
+      "chapterId": "ch-2",
+      "severity": "high",
+      "note": "Token expiry isn't validated before trusting the claims.",
+      "status": "open",
+      "createdAt": "2026-06-01T12:30:00Z"
+    }
   ]
 }

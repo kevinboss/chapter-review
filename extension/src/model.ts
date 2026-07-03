@@ -33,6 +33,22 @@ export interface Chapter {
   files: FileEntry[];
 }
 
+export type IssueSeverity = "critical" | "high" | "low";
+export type IssueStatus = "open" | "resolved";
+
+/** A review finding the skill recorded. Grouped by chapterId, anchored to path(+hunk). */
+export interface Issue {
+  id: string;
+  path: string;
+  oldPath?: string;
+  hunk?: Hunk;
+  chapterId?: string;
+  severity: IssueSeverity;
+  note: string;
+  status?: IssueStatus;
+  createdAt?: string;
+}
+
 export interface Manifest {
   version: 1;
   base: string;
@@ -43,6 +59,11 @@ export interface Manifest {
   summary?: string;
   chapters: Chapter[];
   unassigned: UnassignedEntry[];
+  issues?: Issue[];
+}
+
+export function isOpen(issue: Issue): boolean {
+  return issue.status !== "resolved";
 }
 
 /**
