@@ -6,6 +6,8 @@ src/**
 **/*.ts
 **/*.map
 tsconfig.json
+scripts/**
 .gitignore
 .vscodeignore
+.npmrc
 node_modules/**
