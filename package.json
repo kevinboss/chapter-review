@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "validate": "node scripts/validate.mjs",
+    "demo": "node scripts/make-demo.mjs",
     "test": "node scripts/test.mjs && node scripts/validate.mjs example-chapters.json"
   },
   "devDependencies": {
