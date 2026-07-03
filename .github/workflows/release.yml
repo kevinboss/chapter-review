@@ -1,0 +1,51 @@
+name: Release
+
+# Tag a release (vX.Y.Z) to build the .vsix and the skill bundle and attach
+# them to a GitHub Release. The /release skill cuts the tag; this publishes it.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Tag must match extension version
+        run: |
+          VERSION=$(node -p "require('./extension/package.json').version")
+          TAG=${GITHUB_REF_NAME#v}
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match extension version $VERSION"
+            exit 1
+          fi
+
+      - name: Build .vsix
+        working-directory: extension
+        run: |
+          npm ci
+          npm run package
+
+      - name: Bundle the skill
+        run: |
+          cd .claude/skills
+          zip -r "$GITHUB_WORKSPACE/chapter-review-skill.zip" chapter-review
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            extension/*.vsix \
+            chapter-review-skill.zip

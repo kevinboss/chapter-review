@@ -1,0 +1,11 @@
+# Ship only the compiled extension and its docs. Sources, build config and
+# dev tooling stay out of the .vsix.
+.vscode/**
+.vscode-test/**
+src/**
+**/*.ts
+**/*.map
+tsconfig.json
+.gitignore
+.vscodeignore
+node_modules/**

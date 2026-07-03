@@ -1,5 +1,5 @@
 {
-  "name": "claude-chapter-review",
+  "name": "chapter-review",
   "private": true,
   "type": "module",
   "scripts": {

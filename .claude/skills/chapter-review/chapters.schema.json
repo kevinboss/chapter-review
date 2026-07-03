@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://raw.githubusercontent.com/kevinboss/claude-chapter-review/main/.claude/skills/chapter-review/chapters.schema.json",
+  "$id": "https://raw.githubusercontent.com/kevinboss/chapter-review/main/.claude/skills/chapter-review/chapters.schema.json",
   "title": "Chapter review manifest",
   "description": "Partition of a branch diff into logical review chapters. Written by the chapter-review skill to <git-dir>/chapter-review/chapters.json (tool state inside .git, keeping the worktree clean), consumed by the chapter-review VSCode extension. Structural rules only; the partition rules (every hunk in exactly one chapter or unassigned, no overlaps) are enforced by validate.mjs alongside this file, which is authoritative if the two disagree.",
   "type": "object",

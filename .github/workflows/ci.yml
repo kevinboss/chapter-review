@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  contract:
+    name: Contract + validator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validator regression tests
+        run: npm test
+      - name: Portability check (skill runs standalone, no node_modules)
+        run: |
+          cp -r .claude/skills/chapter-review "$RUNNER_TEMP/skill"
+          cd "$RUNNER_TEMP/skill"
+          node validate.mjs example-chapters.json
+
+  extension:
+    name: Extension build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - name: Type-check and compile
+        run: npm run compile
+      - name: Package .vsix (build verification)
+        run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chapter-review-vsix
+          path: extension/*.vsix
