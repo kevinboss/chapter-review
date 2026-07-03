@@ -11,8 +11,11 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const STATUS = new Set(["added", "modified", "deleted", "renamed"]);
+const SEVERITY = new Set(["critical", "high", "low"]);
+const ISSUE_STATUS = new Set(["open", "resolved"]);
 const SHA = /^[0-9a-f]{7,40}$/;
 const CHAPTER_ID = /^ch-[0-9]+$/;
+const ISSUE_ID = /^iss-[0-9]+$/;
 const PATH = /^[^/]/; // repo-relative, no leading slash
 const ISO_8601 =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
@@ -102,6 +105,37 @@ function checkChapter(ch, label, push) {
   noExtraKeys(ch, ["id", "title", "description", "files"], label, push);
 }
 
+function checkIssue(issue, label, push) {
+  if (!isObject(issue)) {
+    push(`${label} must be an object`);
+    return;
+  }
+  if (typeof issue.id !== "string" || !ISSUE_ID.test(issue.id)) {
+    push(`${label}.id must match iss-<number>`);
+  }
+  checkPath(issue.path, `${label}.path`, push);
+  if (issue.oldPath !== undefined) checkPath(issue.oldPath, `${label}.oldPath`, push);
+  if (issue.hunk !== undefined) checkHunk(issue.hunk, `${label}.hunk`, push);
+  if (issue.chapterId !== undefined && (typeof issue.chapterId !== "string" || !CHAPTER_ID.test(issue.chapterId))) {
+    push(`${label}.chapterId must match ch-<number>`);
+  }
+  if (!SEVERITY.has(issue.severity)) {
+    push(`${label}.severity must be one of ${[...SEVERITY].join(", ")}`);
+  }
+  if (typeof issue.note !== "string" || issue.note.length < 1) {
+    push(`${label}.note must be a non-empty string`);
+  }
+  if (issue.status !== undefined && !ISSUE_STATUS.has(issue.status)) {
+    push(`${label}.status must be one of ${[...ISSUE_STATUS].join(", ")}`);
+  }
+  noExtraKeys(
+    issue,
+    ["id", "path", "oldPath", "hunk", "chapterId", "severity", "note", "status", "createdAt"],
+    label,
+    push
+  );
+}
+
 function structuralErrors(m) {
   const errors = [];
   const push = (msg) => errors.push(`schema: ${msg}`);
@@ -130,9 +164,10 @@ function structuralErrors(m) {
   }
   if (!Array.isArray(m.chapters)) push("chapters must be an array");
   if (!Array.isArray(m.unassigned)) push("unassigned must be an array");
+  if (m.issues !== undefined && !Array.isArray(m.issues)) push("issues, when present, must be an array");
   noExtraKeys(
     m,
-    ["version", "base", "head", "mergeBase", "headSha", "generatedAt", "summary", "chapters", "unassigned"],
+    ["version", "base", "head", "mergeBase", "headSha", "generatedAt", "summary", "chapters", "unassigned", "issues"],
     "manifest",
     push
   );
@@ -144,6 +179,16 @@ function structuralErrors(m) {
     m.unassigned.forEach((f, i) =>
       checkFile(f, `unassigned[${i}]`, push, { requireReason: true })
     );
+  }
+  if (Array.isArray(m.issues)) {
+    const ids = new Set();
+    m.issues.forEach((issue, i) => {
+      checkIssue(issue, `issues[${i}]`, push);
+      if (isObject(issue) && typeof issue.id === "string") {
+        if (ids.has(issue.id)) push(`duplicate issue id "${issue.id}"`);
+        ids.add(issue.id);
+      }
+    });
   }
   return errors;
 }

@@ -48,9 +48,54 @@
       "type": "array",
       "description": "Quarantined noise: lockfiles, snapshots, generated code, pure autoformat hunks. Always present, may be empty.",
       "items": { "$ref": "#/definitions/unassignedFile" }
+    },
+    "issues": {
+      "type": "array",
+      "description": "Per-chapter review findings the chapter-review skill noticed and wants to surface; the extension displays them. Authored by the skill while it reviews the diff (and added to on request during follow-up); durable: the skill MUST carry this array across regeneration (re-mapping each issue's chapterId to the chapter that owns its path/hunk in the new partition), never dropping findings. Optional; absent means none yet.",
+      "items": { "$ref": "#/definitions/issue" }
     }
   },
   "definitions": {
+    "issue": {
+      "type": "object",
+      "required": ["id", "path", "severity", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^iss-[0-9]+$",
+          "description": "Stable issue ID, unique within the manifest. Unlike chapter IDs, these persist across regeneration."
+        },
+        "path": {
+          "$ref": "#/definitions/path",
+          "description": "File the issue is about. With hunk, this is the durable key that survives regeneration."
+        },
+        "oldPath": { "$ref": "#/definitions/path" },
+        "hunk": {
+          "$ref": "#/definitions/hunk",
+          "description": "Optional: the specific hunk the issue concerns, for line-level findings."
+        },
+        "chapterId": {
+          "type": "string",
+          "pattern": "^ch-[0-9]+$",
+          "description": "Soft grouping: the chapter it was noted under. Positional, so treat path(+hunk) as the real key."
+        },
+        "severity": { "enum": ["critical", "high", "low"] },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The finding."
+        },
+        "status": {
+          "enum": ["open", "resolved"],
+          "description": "Defaults to open when omitted."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
     "chapter": {
       "type": "object",
       "required": ["id", "title", "files"],

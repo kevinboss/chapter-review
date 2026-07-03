@@ -1,7 +1,8 @@
 ---
 name: chapter-review
-version: 1.0.0
 description: Group the current branch's changes into logical "chapters" for review. Writes the chapter manifest to <git-dir>/chapter-review/chapters.json (inside .git, so the worktree stays clean), which the chapter-review VSCode extension renders as a reviewable tree. Use when the user wants to review a branch chapter by chapter, prepare a PR for self-review, or split a sprawling branch into a reviewable narrative.
+metadata:
+  version: 1.0.0
 ---
 
 # Chapter review
@@ -32,9 +33,15 @@ Partition the current branch's diff into logical chapters and write the manifest
 
 6. **Order chapters as a review flow.** The order *is* the narrative: at every chapter the reviewer should know why they're looking at it. Core change first — the thing the branch exists for, with a preceding removal only when it motivates what follows. Independent side changes (mechanical renames, opportunistic refactors) come after the core story, not before it; leading with a trivial rename buries the plot. Then tests, then docs/chores.
 
-   Story test before writing: read your titles top to bottom. They should work as a changelog that explains the branch to someone who hasn't seen the diff. If any title raises "why is this here / why now?", re-order or re-merge.
+   Story test before writing: read your titles top to bottom. They should work as a changelog that explains the branch to someone who hasn't seen the diff. If any title raises "why is this here / why now?", re-order or re-merge. A tooling or test-framework bump (an xunit upgrade, say) can sit with the tests it supports or as a trailing chore; either reads fine.
 
-7. **Write the manifest.** Target: `$(git rev-parse --git-dir)/chapter-review/chapters.json` — use `--git-dir`, not a hardcoded `.git/`, so worktrees resolve correctly; create the `chapter-review` directory if missing. Stable IDs (`ch-1`, `ch-2`, …), ISO-8601 `generatedAt`. After writing, print one line: `Wrote N chapters covering M hunks across F files.` M counts unified-diff hunks (what step 2 parsed), not claim entries — a whole-file claim spanning 3 hunks counts as 3. The validator prints claim units instead (whole-file = 1), so its number being lower than M is expected, not a bug. Don't echo the JSON.
+7. **Note the issues you noticed.** Partitioning means reading the whole diff, so record genuine problems as you go into the top-level `issues` array: bugs, risky changes, smells, or things worth questioning. Give each a unique `iss-N` id, the `path`, the `chapterId` it falls under when it maps to one, a `severity`, and a one-line `note` (`status` defaults to open and `createdAt` is optional; see the schema). Add a `hunk` only when the file entry enumerates hunks (a modified file split by hunk) and the finding is about one of them; for a whole-file entry (added/deleted/renamed claimed whole), `path` alone is the anchor, don't invent coordinates.
+
+   Severity: `critical` = broken or unsafe as written (data loss, security hole, crash on a normal path); `high` = a real bug or risk that bites on a real path; `low` = a smell, gap, or minor concern. Judge the change as written, but don't flag an intentional simplification as if it were a production omission unless the branch presents itself as complete. Flag only real findings; a clean chapter has none, and issues never block writing the manifest. The user reviews these and can ask you to add or revise more later (see Follow-up review).
+
+8. **Write the manifest.** Target: `$(git rev-parse --git-dir)/chapter-review/chapters.json` — use `--git-dir`, not a hardcoded `.git/`, so worktrees resolve correctly; create the `chapter-review` directory if missing. Stable IDs (`ch-1`, `ch-2`, …), ISO-8601 `generatedAt`.
+
+   **Preserve review issues on regeneration.** If a `chapters.json` already exists, read its top-level `issues` array and carry it forward. These are review findings, not generated content; dropping them loses real work. For each issue, re-map its `chapterId` to whichever chapter owns its `path` (and `hunk`, if set) in the new partition. Prune an issue only when its `path`/`hunk` no longer appears in the diff at all, and note any pruning in the summary line. After writing, print one line: `Wrote N chapters covering M hunks across F files.` M counts unified-diff hunks (what step 2 parsed), not claim entries — a whole-file claim spanning 3 hunks counts as 3. The validator prints claim units instead (whole-file = 1), so its number being lower than M is expected, not a bug. Don't echo the JSON.
 
 ## Quality rules
 
@@ -51,7 +58,26 @@ The contract is `chapters.schema.json` (draft-07) and the worked example is `exa
 - Splitting a file between a chapter and `unassigned` is normal (e.g. one real hunk plus one autoformat hunk); the disjointness rules are the same. In that case give the chapter-side entry a `note`; the unassigned side carries only its `reason` (the schema forbids `note` there).
 - A renamed file's content hunks are absorbed by its whole-file claim; enumerate them only if they must split across chapters, then treat it like any modified file (with `oldPath` set).
 - `unassigned` entries require a `reason` and are always present as an array, even when empty.
+- `issues` is an optional top-level array of the skill's per-chapter review findings (id, path, optional hunk, chapterId, severity, note, status). The skill authors them while reviewing; the extension displays them and the user can ask for more (often while focused on a file). Preserve them across regeneration (step 7). The durable anchor is `path` (+ `hunk`); `chapterId` is the display grouping and is re-mapped on regen.
 - `version` is `1`; consumers reject unknown versions.
+
+## Follow-up review (focus-driven)
+
+Once the manifest exists, the user reviews in the extension and asks you questions here. The extension writes what they are looking at to `$(git rev-parse --git-dir)/chapter-review/focus.json` each time they click a file, hunk, or issue:
+
+```json
+{ "path": "src/auth/oidc.ts", "line": 42, "chapterId": "ch-2", "issueId": "iss-3", "updatedAt": "2026-07-03T10:00:00Z" }
+```
+
+`line`, `chapterId`, and `issueId` are optional.
+
+**When it applies.** Any question that leans on what the user is currently looking at is focus-driven, not just the phrases "this file / this change / this issue". It also covers "what am I looking at", "what's the problem here", "explain this", and bare follow-ups like "now?". If a question names no explicit target, assume it is about the current focus.
+
+**How to answer.** `focus.json` is a pointer, not the answer. Resolve it: read the referenced file (around `line` when present) and look up `chapterId`/`issueId` in `chapters.json`, then answer about that actual content. Never just echo the pointer back or hand the lookup to the user. Resolve it silently: don't preface the answer by explaining that the question was focus-driven or that you consulted `focus.json`. Just answer as if the user had named the file.
+
+Example: the user asks "what's wrong here?" and `focus.json` points at `QueueNotifier.cs` / `iss-1`. Read the file and the `iss-1` note, then explain the finding against the code, not "you are focused on iss-1".
+
+On request, add or revise entries in the `issues` array (unique `iss-N` id, `path` + optional `hunk`, `chapterId`, `severity`, `note`), then re-run the validator. `focus.json` is transient state owned by the extension; read it, never write it.
 
 ## Installing in another repo
 

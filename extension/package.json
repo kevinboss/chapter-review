@@ -22,8 +22,17 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "chapter-review",
+          "title": "Chapter Review",
+          "icon": "media/chapter-review.svg"
+        }
+      ]
+    },
     "views": {
-      "scm": [
+      "chapter-review": [
         {
           "id": "chapterReview",
           "name": "Chapters",
@@ -70,6 +79,17 @@
         "command": "chapterReview.installSkill",
         "title": "Install or Update Skill",
         "category": "Chapter Review"
+      },
+      {
+        "command": "chapterReview.openIssue",
+        "title": "Open Issue",
+        "category": "Chapter Review"
+      },
+      {
+        "command": "chapterReview.resolveIssue",
+        "title": "Toggle Issue Resolved",
+        "category": "Chapter Review",
+        "icon": "$(check)"
       }
     ],
     "menus": {
@@ -98,9 +118,24 @@
           "when": "view == chapterReview"
         }
       ],
+      "view/item/context": [
+        {
+          "command": "chapterReview.resolveIssue",
+          "when": "view == chapterReview && viewItem == chapterReviewIssue",
+          "group": "inline"
+        }
+      ],
       "commandPalette": [
         {
           "command": "chapterReview.openDiff",
+          "when": "false"
+        },
+        {
+          "command": "chapterReview.openIssue",
+          "when": "false"
+        },
+        {
+          "command": "chapterReview.resolveIssue",
           "when": "false"
         }
       ]

@@ -49,12 +49,16 @@ function installTargets(): InstallTarget[] {
   return targets;
 }
 
-/** `version:` from a SKILL.md's frontmatter, or undefined if the file is absent. */
+/**
+ * `version` from a SKILL.md's frontmatter `metadata` block, or undefined if
+ * the file is absent. Lives under `metadata:` because VS Code's agent-skill
+ * schema rejects a top-level `version` key; the leading indent is allowed for.
+ */
 async function readSkillVersion(skillMd: vscode.Uri): Promise<string | undefined> {
   try {
     const bytes = await vscode.workspace.fs.readFile(skillMd);
     const text = Buffer.from(bytes).toString("utf8");
-    return text.match(/^version:\s*["']?([^"'\n]+?)["']?\s*$/m)?.[1];
+    return text.match(/^\s*version:\s*["']?([^"'\n]+?)["']?\s*$/m)?.[1];
   } catch {
     return undefined;
   }

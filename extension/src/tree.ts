@@ -5,6 +5,8 @@ import {
   entryKeys,
   FileEntry,
   Hunk,
+  isOpen,
+  Issue,
   Manifest,
   reviewKey,
   UnassignedEntry,
@@ -37,8 +39,22 @@ export interface HunkNode {
   hunk: Hunk;
   index: number;
 }
+export interface IssueNode {
+  kind: "issue";
+  issue: Issue;
+}
+export interface IssuesRootNode {
+  kind: "issuesRoot";
+}
 
-export type Node = ChapterNode | UnassignedRootNode | FolderNode | FileNode | HunkNode;
+export type Node =
+  | ChapterNode
+  | UnassignedRootNode
+  | FolderNode
+  | FileNode
+  | HunkNode
+  | IssueNode
+  | IssuesRootNode;
 
 export interface ProgressReader {
   isReviewed(key: string): boolean;
@@ -78,13 +94,23 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       if (this.manifest.unassigned.length > 0) {
         roots.push({ kind: "unassignedRoot" });
       }
+      if (this.orphanIssues().length > 0) {
+        roots.push({ kind: "issuesRoot" });
+      }
       return roots;
     }
     switch (node.kind) {
       case "chapter":
-        return this.fileChildren(node.chapter.id, node.chapter.files);
+        return [
+          ...this.fileChildren(node.chapter.id, node.chapter.files),
+          ...this.issuesForChapter(node.chapter.id).map(
+            (issue): IssueNode => ({ kind: "issue", issue })
+          ),
+        ];
       case "unassignedRoot":
         return this.fileChildren("unassigned", this.manifest.unassigned);
+      case "issuesRoot":
+        return this.orphanIssues().map((issue): IssueNode => ({ kind: "issue", issue }));
       case "folder":
         return node.children;
       case "file": {
@@ -101,8 +127,29 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
         }));
       }
       case "hunk":
+      case "issue":
         return [];
     }
+  }
+
+  private allIssues(): Issue[] {
+    return this.manifest?.issues ?? [];
+  }
+
+  private issuesForChapter(chapterId: string): Issue[] {
+    return this.allIssues().filter((i) => i.chapterId === chapterId);
+  }
+
+  private issuesForFile(chapterId: string, filePath: string): Issue[] {
+    return this.allIssues().filter(
+      (i) => i.chapterId === chapterId && i.path === filePath
+    );
+  }
+
+  /** Issues whose chapterId is unset or no longer names a chapter. */
+  private orphanIssues(): Issue[] {
+    const ids = new Set(this.manifest?.chapters.map((c) => c.id));
+    return this.allIssues().filter((i) => !i.chapterId || !ids.has(i.chapterId));
   }
 
   private fileChildren(
@@ -138,6 +185,10 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
         return this.fileItem(node);
       case "hunk":
         return this.hunkItem(node);
+      case "issue":
+        return this.issueItem(node);
+      case "issuesRoot":
+        return this.issuesRootItem();
     }
   }
 
@@ -148,9 +199,11 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     );
     item.id = `chapter:${chapter.id}`;
     const { done, total } = this.countUnits(chapter.files);
-    item.description = `${done}/${total}`;
+    const open = this.issuesForChapter(chapter.id).filter(isOpen).length;
+    item.description =
+      open > 0 ? `${done}/${total} · ${open} issue${open > 1 ? "s" : ""}` : `${done}/${total}`;
     item.iconPath = new vscode.ThemeIcon(
-      done === total ? "pass-filled" : "book"
+      open > 0 ? "warning" : done === total ? "pass-filled" : "book"
     );
     if (chapter.description) {
       item.tooltip = chapter.description;
@@ -193,6 +246,13 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     if ("reason" in entry) {
       parts.push(`(${entry.reason})`);
     }
+    const openIssues =
+      node.ownerId !== "unassigned"
+        ? this.issuesForFile(node.ownerId, entry.path).filter(isOpen).length
+        : 0;
+    if (openIssues > 0) {
+      parts.push(`${openIssues} issue${openIssues > 1 ? "s" : ""}`);
+    }
     item.description = parts.join("  ");
 
     const note = "note" in entry ? entry.note : undefined;
@@ -234,6 +294,33 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     return item;
   }
 
+  private issueItem(node: IssueNode): vscode.TreeItem {
+    const { issue } = node;
+    const item = new vscode.TreeItem(issue.note, vscode.TreeItemCollapsibleState.None);
+    item.id = `issue:${issue.id}`;
+    const resolved = !isOpen(issue);
+    item.description = resolved ? `${issue.severity} · resolved` : issue.severity;
+    item.tooltip = `${issue.severity.toUpperCase()}${resolved ? " (resolved)" : ""}: ${issue.note}\n${issue.path}`;
+    item.iconPath = issueIcon(issue);
+    item.contextValue = "chapterReviewIssue";
+    item.command = {
+      command: "chapterReview.openIssue",
+      title: "Open Issue",
+      arguments: [node],
+    };
+    return item;
+  }
+
+  private issuesRootItem(): vscode.TreeItem {
+    const item = new vscode.TreeItem("Issues", vscode.TreeItemCollapsibleState.Collapsed);
+    item.id = "issuesRoot";
+    const open = this.orphanIssues().filter(isOpen).length;
+    item.description = `${open} open`;
+    item.iconPath = new vscode.ThemeIcon("warning");
+    item.tooltip = "Issues not tied to a current chapter";
+    return item;
+  }
+
   private countUnits(entries: (FileEntry | UnassignedEntry)[]): {
     done: number;
     total: number;
@@ -255,6 +342,20 @@ export function nodeKeys(node: Node): string[] {
       return [reviewKey(node.entry.path, node.hunk)];
     default:
       return [];
+  }
+}
+
+function issueIcon(issue: Issue): vscode.ThemeIcon {
+  if (issue.status === "resolved") {
+    return new vscode.ThemeIcon("check");
+  }
+  switch (issue.severity) {
+    case "critical":
+      return new vscode.ThemeIcon("error");
+    case "high":
+      return new vscode.ThemeIcon("warning");
+    default:
+      return new vscode.ThemeIcon("info");
   }
 }
 
