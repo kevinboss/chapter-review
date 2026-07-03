@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/claude-chapter-review/main/schema/chapters.schema.json",
   "title": "Chapter review manifest",
-  "description": "Partition of a branch diff into logical review chapters. Written by the chapter-review skill to .claude/chapters.json, consumed by the chapter-review VSCode extension. Structural rules only; the partition rules (every hunk in exactly one chapter or unassigned, no overlaps) are enforced by scripts/validate.mjs.",
+  "description": "Partition of a branch diff into logical review chapters. Written by the chapter-review skill to <git-dir>/chapter-review/chapters.json (tool state inside .git, keeping the worktree clean), consumed by the chapter-review VSCode extension. Structural rules only; the partition rules (every hunk in exactly one chapter or unassigned, no overlaps) are enforced by scripts/validate.mjs.",
   "type": "object",
   "required": ["version", "base", "head", "mergeBase", "generatedAt", "chapters", "unassigned"],
   "additionalProperties": false,
@@ -25,6 +25,11 @@
       "type": "string",
       "pattern": "^[0-9a-f]{7,40}$",
       "description": "git merge-base <base> <head> at generation time. The diff that was partitioned is mergeBase..head."
+    },
+    "headSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "Commit head resolved to at generation time. Hunk coordinates refer to mergeBase..headSha; consumers use it to reconstruct exact content after the branch moves. Optional but strongly recommended."
     },
     "generatedAt": {
       "type": "string",
