@@ -6,7 +6,7 @@ Pieces:
 
 - **`schema/`** — the contract: a draft-07 JSON Schema for `chapters.json`. [`example-chapters.json`](./example-chapters.json) is a worked example.
 - **`scripts/`** — `validate.mjs` checks a manifest against the schema plus the partition rules (no hunk claimed twice, no overlaps, no double whole-file claims). `test.mjs` regression-tests the validator. Run both with `npm test`.
-- **`skill/`** — Claude Code skill that partitions the current branch's diff into chapters and writes `.claude/chapters.json` in the target repo, using `validate.mjs` as its pre-write check.
+- **`.claude/skills/chapter-review/`** — Claude Code skill that partitions the current branch's diff into chapters and writes the manifest to `<git-dir>/chapter-review/chapters.json` in the target repo (inside `.git`, so the worktree and git status stay clean), using `validate.mjs` as its pre-write check. It lives in `.claude/skills/` so this repo dogfoods it.
 - **`extension/`** — VSCode extension that renders `chapters.json` as a tree (list + tree views), opens diffs on click in the same style as the native git history, and tracks review progress per hunk.
 
 Q&A about the branch still happens in the Claude Code terminal — the extension is purely a review surface.
@@ -20,4 +20,4 @@ Q&A about the branch still happens in the Claude Code terminal — the extension
 
 ## Status
 
-Schema and validator done (`npm test`). No skill loader wired up, no extension scaffolded yet.
+Schema and validator done (`npm test`). Extension scaffolded and compiling. Two ways to try it: `npm run demo` + F5 "Run Extension (C# demo)" for a realistic C# branch review, or plain F5 against this repo's own committed fixture (see `extension/README.md`). Skill not wired into a loader yet.
