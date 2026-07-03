@@ -12,6 +12,7 @@ import {
   resolveGitDir,
 } from "./gitContent";
 import { allEntries, entryKeys, Manifest, parseManifest } from "./model";
+import { checkSkill, installSkill } from "./skillInstaller";
 import {
   ChapterTreeProvider,
   FileNode,
@@ -52,6 +53,13 @@ class ReviewProgress {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // The skill installer needs neither a git repo nor a manifest, so register
+  // it first and let the rest bail out early on non-git workspaces.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("chapterReview.installSkill", () => installSkill(context))
+  );
+  void checkSkill(context);
+
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) {
     return;

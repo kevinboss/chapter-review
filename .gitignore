@@ -4,6 +4,7 @@ obj/
 bin/
 out/
 dist/
+extension/skill/
 *.vsix
 .vscode-test/
 Thumbs.db
