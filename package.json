@@ -1,0 +1,13 @@
+{
+  "name": "claude-chapter-review",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "test": "node scripts/test.mjs && node scripts/validate.mjs example-chapters.json"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  }
+}
