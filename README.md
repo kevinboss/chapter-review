@@ -4,9 +4,9 @@ Tooling to review a git branch as a series of logical *chapters* instead of one 
 
 Pieces:
 
-- **`schema/`** — the contract: a draft-07 JSON Schema for `chapters.json`. [`example-chapters.json`](./example-chapters.json) is a worked example.
-- **`scripts/`** — `validate.mjs` checks a manifest against the schema plus the partition rules (no hunk claimed twice, no overlaps, no double whole-file claims). `test.mjs` regression-tests the validator. Run both with `npm test`.
-- **`.claude/skills/chapter-review/`** — Claude Code skill that partitions the current branch's diff into chapters and writes the manifest to `<git-dir>/chapter-review/chapters.json` in the target repo (inside `.git`, so the worktree and git status stay clean), using `validate.mjs` as its pre-write check. It lives in `.claude/skills/` so this repo dogfoods it.
+- **`.claude/skills/chapter-review/`** — the Claude Code skill and its self-contained contract. Partitions the current branch's diff into chapters and writes the manifest to `<git-dir>/chapter-review/chapters.json` in the target repo (inside `.git`, so the worktree and git status stay clean). The folder bundles everything it needs: `SKILL.md`, `chapters.schema.json` (draft-07 contract), `validate.mjs` (zero-dependency validator, authoritative), and `example-chapters.json` (worked example). Copy the folder into any repo's `.claude/skills/` to install; only `git` and `node` are required.
+- **`.claude/skills/demo/`** — `/demo` skill: rebuild the C# demo, generate its manifest via the chapter-review skill in a sub-agent, launch the extension dev host.
+- **`scripts/`** — `test.mjs` regression-tests the validator; `make-demo.mjs` builds the demo repo. Run tests with `npm test` (no dependencies).
 - **`extension/`** — VSCode extension that renders `chapters.json` as a tree (list + tree views), opens diffs on click in the same style as the native git history, and tracks review progress per hunk.
 
 Q&A about the branch still happens in the Claude Code terminal — the extension is purely a review surface.
@@ -20,4 +20,4 @@ Q&A about the branch still happens in the Claude Code terminal — the extension
 
 ## Status
 
-Schema and validator done (`npm test`). Extension scaffolded and compiling. Two ways to try it: `npm run demo` + F5 "Run Extension (C# demo)" for a realistic C# branch review, or plain F5 against this repo's own committed fixture (see `extension/README.md`). Skill not wired into a loader yet.
+Skill is portable and self-contained (zero dependencies, `npm test` green). Extension scaffolded and compiling. Two ways to try it: `npm run demo` then F5 "Run Extension (C# demo)" for a realistic C# branch review, or plain F5 against this repo's own fixture (see `extension/README.md`). Next: extension packaging and CI.

@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { validateManifest } from "./validate.mjs";
+import { validateManifest } from "../.claude/skills/chapter-review/validate.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const demo = path.join(root, "demo");

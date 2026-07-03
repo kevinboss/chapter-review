@@ -3,12 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "validate": "node scripts/validate.mjs",
+    "validate": "node .claude/skills/chapter-review/validate.mjs",
     "demo": "node scripts/make-demo.mjs",
-    "test": "node scripts/test.mjs && node scripts/validate.mjs example-chapters.json"
-  },
-  "devDependencies": {
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1"
+    "test": "node scripts/test.mjs && node .claude/skills/chapter-review/validate.mjs .claude/skills/chapter-review/example-chapters.json"
   }
 }
