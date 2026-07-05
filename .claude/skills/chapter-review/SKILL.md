@@ -7,7 +7,21 @@ metadata:
 
 # Chapter review
 
-Partition the current branch's diff into logical chapters and write the manifest to `$(git rev-parse --git-dir)/chapter-review/chapters.json`. The contract is `validate.mjs` (authoritative) and `chapters.schema.json` (the same rules as JSON Schema), both next to this file; `example-chapters.json` next to them is a worked illustration. Every hunk must end up in exactly one chapter — or in `unassigned`. The manifest lives inside the git dir on purpose: it is tool state, invisible to `git status`, and no user-owned file (worktree, `.gitignore`, `.git/info/exclude`) gets touched.
+Partition the current branch's diff into logical chapters and hand them to the extension with the `chapter-review` command that sits next to this file. You never read or write the manifest file yourself: `chapter-review write` installs a partition draft, `chapter-review issue …` records findings, and `chapter-review focus`/`show` read back the review state. The command owns the manifest location (`<git-dir>/chapter-review/chapters.json`), validates every change, and preserves findings across regeneration — so you talk to the extension, not to a file.
+
+Every hunk must end up in exactly one chapter — or in `unassigned`. The contract is `validate.mjs` (authoritative) and `chapters.schema.json` (the same rules as JSON Schema), both next to this file; `example-chapters.json` next to them is a worked illustration. The manifest lives inside the git dir on purpose: it is tool state, invisible to `git status`, and no user-owned file (worktree, `.gitignore`, `.git/info/exclude`) gets touched.
+
+## The command
+
+Run it from anywhere in the repo; resolve its path relative to this SKILL.md (not the target repo's cwd), e.g. `"$SKILL_DIR/chapter-review" <args>`, or `node "$SKILL_DIR/chapter-review" <args>` if it isn't executable. Requirements are only `git` and `node` on PATH.
+
+- `chapter-review write [file]` — validate a **partition draft** (chapters + unassigned + meta, *no* `issues`) and install it. Reads the draft from `file` or stdin. It validates before writing and refuses an invalid manifest, and it carries any existing findings forward (re-mapping each to its new chapter, pruning ones whose path vanished), so regeneration never loses review work. The summary line reports how many findings were preserved and pruned when regenerating (a first write has none).
+- `chapter-review issue add --path P --severity S --note "…" [--chapter ch-N] [--hunk oldStart,oldLines,newStart,newLines] [--old-path P]` — record a finding. The id (`iss-N`) is assigned for you and the owning chapter is inferred from `--path`. When the path lives in **one** chapter that's unambiguous; when it spans **several** (a hunk-split file), pass `--hunk` to select the chapter that owns that range, or `--chapter` to name it outright — otherwise the command picks the first owner and warns you to disambiguate.
+- `chapter-review issue set <id> [flags]` / `resolve <id>` / `reopen <id>` / `rm <id>` / `list` — revise findings in place. No need to re-send the manifest.
+- `chapter-review focus` — print what the reviewer is currently looking at.
+- `chapter-review show` — print the current manifest.
+
+Every mutating command validates the resulting manifest and refuses to write if it would be invalid, printing the errors. There is no separate validate step to remember.
 
 ## Steps
 
@@ -26,22 +40,19 @@ Partition the current branch's diff into logical chapters and write the manifest
 
    A generated file's *driver* is not noise: a version bump in a csproj or package.json is a hand edit and belongs in a chapter (its own chore chapter, or the chapter that needed the bump), while the lockfile it regenerates goes to `unassigned` with a reason pointing at the driver.
 
-5. **Validate the partition before writing.**
-   - Completeness: `⋃(chapter hunks) ∪ unassigned == full diff`. Check this yourself against the parsed diff — the validator can't see the repo.
-   - Structure and disjointness: run `node validate.mjs <candidate.json>` where `validate.mjs` sits next to this SKILL.md (zero dependencies, just needs Node — resolve it relative to this file, not the target repo's cwd). It checks the schema plus: no hunk claimed twice, no overlapping hunk ranges, no whole-file claim next to another claim, consistent status per path.
-   - If validation fails, fix and re-validate. Do not write a broken file.
+5. **Check completeness yourself.** `⋃(chapter hunks) ∪ unassigned == full diff` — verify this against the parsed diff, because the command can't see the repo. Everything else (schema, no hunk claimed twice, no overlapping ranges, no whole-file claim next to another claim, consistent status per path) is enforced by `chapter-review write` in the next step: it validates the draft and refuses to install a broken partition, printing the errors. There's no separate validator to run.
 
 6. **Order chapters as a review flow.** The order *is* the narrative: at every chapter the reviewer should know why they're looking at it. Core change first — the thing the branch exists for, with a preceding removal only when it motivates what follows. Independent side changes (mechanical renames, opportunistic refactors) come after the core story, not before it; leading with a trivial rename buries the plot. Then tests, then docs/chores.
 
    Story test before writing: read your titles top to bottom. They should work as a changelog that explains the branch to someone who hasn't seen the diff. If any title raises "why is this here / why now?", re-order or re-merge. A tooling or test-framework bump (an xunit upgrade, say) can sit with the tests it supports or as a trailing chore; either reads fine.
 
-7. **Note the issues you noticed.** Partitioning means reading the whole diff, so record genuine problems as you go into the top-level `issues` array: bugs, risky changes, smells, or things worth questioning. Give each a unique `iss-N` id, the `path`, the `chapterId` it falls under when it maps to one, a `severity`, and a one-line `note` (`status` defaults to open and `createdAt` is optional; see the schema). Add a `hunk` only when the file entry enumerates hunks (a modified file split by hunk) and the finding is about one of them; for a whole-file entry (added/deleted/renamed claimed whole), `path` alone is the anchor, don't invent coordinates.
+7. **Note the issues you noticed.** Partitioning means reading the whole diff, so keep track of genuine problems as you go: bugs, risky changes, smells, or things worth questioning. You'll record them with `chapter-review issue add` in step 9 (it needs the manifest to exist first). Each finding is a `path`, a `severity`, a one-line `note`, and — when it's about a specific hunk of a hunk-split file — a `--hunk`; for a whole-file entry (added/deleted/renamed claimed whole), `path` alone is the anchor, don't invent coordinates. The `iss-N` id and the owning chapter are assigned for you.
 
-   Severity: `critical` = broken or unsafe as written (data loss, security hole, crash on a normal path); `high` = a real bug or risk that bites on a real path; `low` = a smell, gap, or minor concern. Judge the change as written, but don't flag an intentional simplification as if it were a production omission unless the branch presents itself as complete. Flag only real findings; a clean chapter has none, and issues never block writing the manifest. The user reviews these and can ask you to add or revise more later (see Follow-up review).
+   Severity: `critical` = broken or unsafe as written (data loss, security hole, crash on a normal path); `high` = a real bug or risk that bites on a real path; `low` = a smell, gap, or minor concern. Judge the change as written, but don't flag an intentional simplification as if it were a production omission unless the branch presents itself as complete. Flag only real findings; a clean chapter has none, and findings never block writing the manifest. The user reviews these and can ask you to add or revise more later (see Follow-up review).
 
-8. **Write the manifest.** Target: `$(git rev-parse --git-dir)/chapter-review/chapters.json` — use `--git-dir`, not a hardcoded `.git/`, so worktrees resolve correctly; create the `chapter-review` directory if missing. Stable IDs (`ch-1`, `ch-2`, …), ISO-8601 `generatedAt`.
+8. **Install the partition.** Build the draft — `version: 1`, `base`, `head`, `mergeBase`, `headSha`, ISO-8601 `generatedAt`, `chapters` (stable IDs `ch-1`, `ch-2`, …), and `unassigned` — and hand it to `chapter-review write` (write it to a scratch file and pass the path, or pipe it on stdin). Do **not** put an `issues` array in the draft; findings are recorded separately in step 9 and preserved automatically. The command validates and refuses a broken partition (fix and re-run), then prints the summary line — relay it, don't echo the JSON. On regeneration it carries existing findings forward and re-maps them for you; nothing to preserve by hand.
 
-   **Preserve review issues on regeneration.** If a `chapters.json` already exists, read its top-level `issues` array and carry it forward. These are review findings, not generated content; dropping them loses real work. For each issue, re-map its `chapterId` to whichever chapter owns its `path` (and `hunk`, if set) in the new partition. Prune an issue only when its `path`/`hunk` no longer appears in the diff at all, and note any pruning in the summary line. After writing, print one line: `Wrote N chapters covering M hunks across F files.` M counts unified-diff hunks (what step 2 parsed), not claim entries — a whole-file claim spanning 3 hunks counts as 3. The validator prints claim units instead (whole-file = 1), so its number being lower than M is expected, not a bug. Don't echo the JSON.
+9. **Record the findings.** For each problem from step 7, run `chapter-review issue add --path … --severity … --note "…"`. The owning chapter is inferred from the path; when the path spans several chapters, add `--hunk oldStart,oldLines,newStart,newLines` (selects the chapter owning that range) or `--chapter ch-N` (names it) — the command warns if it has to guess. Skip this step when the branch is clean.
 
 ## Quality rules
 
@@ -58,30 +69,30 @@ The contract is `chapters.schema.json` (draft-07) and the worked example is `exa
 - Splitting a file between a chapter and `unassigned` is normal (e.g. one real hunk plus one autoformat hunk); the disjointness rules are the same. In that case give the chapter-side entry a `note`; the unassigned side carries only its `reason` (the schema forbids `note` there).
 - A renamed file's content hunks are absorbed by its whole-file claim; enumerate them only if they must split across chapters, then treat it like any modified file (with `oldPath` set).
 - `unassigned` entries require a `reason` and are always present as an array, even when empty.
-- `issues` is an optional top-level array of the skill's per-chapter review findings (id, path, optional hunk, chapterId, severity, note, status). The skill authors them while reviewing; the extension displays them and the user can ask for more (often while focused on a file). Preserve them across regeneration (step 7). The durable anchor is `path` (+ `hunk`); `chapterId` is the display grouping and is re-mapped on regen.
+- `issues` is an optional top-level array of the skill's per-chapter review findings (id, path, optional hunk, chapterId, severity, note, status). You never write this array directly — `chapter-review issue …` owns it (assigning ids, inferring chapters, preserving across regeneration). The durable anchor is `path` (+ `hunk`); `chapterId` is the display grouping and is re-mapped on regen.
 - `version` is `1`; consumers reject unknown versions.
 
 ## Follow-up review (focus-driven)
 
-Once the manifest exists, the user reviews in the extension and asks you questions here. The extension writes what they are looking at to `$(git rev-parse --git-dir)/chapter-review/focus.json` each time they click a file, hunk, or issue:
+Once the manifest exists, the user reviews in the extension and asks you questions here. Run `chapter-review focus` to see what they are currently looking at — it prints what they last clicked (a file, hunk, or issue):
 
 ```json
 { "path": "src/auth/oidc.ts", "line": 42, "chapterId": "ch-2", "issueId": "iss-3", "updatedAt": "2026-07-03T10:00:00Z" }
 ```
 
-`line`, `chapterId`, and `issueId` are optional.
+`line`, `chapterId`, and `issueId` are optional; if nothing is selected yet the command says so.
 
 **When it applies.** Any question that leans on what the user is currently looking at is focus-driven, not just the phrases "this file / this change / this issue". It also covers "what am I looking at", "what's the problem here", "explain this", and bare follow-ups like "now?". If a question names no explicit target, assume it is about the current focus.
 
-**How to answer.** `focus.json` is a pointer, not the answer. Resolve it: read the referenced file (around `line` when present) and look up `chapterId`/`issueId` in `chapters.json`, then answer about that actual content. Never just echo the pointer back or hand the lookup to the user. Resolve it silently: don't preface the answer by explaining that the question was focus-driven or that you consulted `focus.json`. Just answer as if the user had named the file.
+**How to answer.** The focus is a pointer, not the answer. Resolve it: read the referenced file (around `line` when present) and look up `chapterId`/`issueId` in the manifest (`chapter-review show`), then answer about that actual content. Never just echo the pointer back or hand the lookup to the user. Resolve it silently: don't preface the answer by explaining that the question was focus-driven or that you consulted the focus. Just answer as if the user had named the file.
 
-Example: the user asks "what's wrong here?" and `focus.json` points at `QueueNotifier.cs` / `iss-1`. Read the file and the `iss-1` note, then explain the finding against the code, not "you are focused on iss-1".
+Example: the user asks "what's wrong here?" and the focus points at `QueueNotifier.cs` / `iss-1`. Read the file and the `iss-1` note, then explain the finding against the code, not "you are focused on iss-1".
 
-On request, add or revise entries in the `issues` array (unique `iss-N` id, `path` + optional `hunk`, `chapterId`, `severity`, `note`), then re-run the validator. `focus.json` is transient state owned by the extension; read it, never write it.
+On request, add or revise findings with `chapter-review issue add` / `issue set <id>` / `resolve <id>` / `reopen <id>` / `rm <id>`; each validates and installs on its own. The focus is transient state owned by the extension; read it with `chapter-review focus`, never write it.
 
 ## Installing in another repo
 
-This skill directory is self-contained: `SKILL.md`, `validate.mjs`, `chapters.schema.json`, `example-chapters.json`. Copy the whole `chapter-review/` folder into that repo's `.claude/skills/`. Requirements are only `git` and `node` on PATH — no `npm install`, no dependencies. Pair it with the chapter-review VSCode extension to review the generated manifest.
+This skill directory is self-contained: `SKILL.md`, the `chapter-review` command, `validate.mjs` (which the command uses), `chapters.schema.json`, `example-chapters.json`. Copy the whole `chapter-review/` folder into that repo's `.claude/skills/`. Requirements are only `git` and `node` on PATH — no `npm install`, no dependencies. Pair it with the chapter-review VSCode extension to review the generated manifest.
 
 ## Known limitations
 
