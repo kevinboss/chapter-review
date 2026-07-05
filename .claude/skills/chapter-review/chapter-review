@@ -1,0 +1,443 @@
+#!/usr/bin/env node
+// chapter-review — the agent-facing command for talking to the chapter-review
+// VSCode extension. It owns the two-file protocol inside the git dir
+// (chapters.json, focus.json) so the skill interacts through intent-level
+// commands instead of reading and writing those paths by hand.
+//
+//   chapter-review focus                    print what the reviewer is looking at
+//   chapter-review show                     print the current manifest
+//   chapter-review write [file]             validate a partition draft, then install it
+//   chapter-review issue add    <flags>     record a review finding
+//   chapter-review issue set    <id> <flags>  revise a finding
+//   chapter-review issue resolve <id>       mark a finding resolved
+//   chapter-review issue reopen  <id>       reopen a finding
+//   chapter-review issue rm      <id>       drop a finding
+//   chapter-review issue list               list findings
+//
+// The manifest destination (<git-dir>/chapter-review/chapters.json) is fixed
+// and owned by this command, so the skill never names it. `write` takes only
+// the partition (chapters + unassigned + meta); the command carries existing
+// issues forward across regeneration and re-maps their chapterId, and the
+// `issue` subcommands mutate findings in place — so the agent never re-sends
+// the whole file to add or change one issue. Every mutation is validated
+// before it lands; an invalid change is refused, not written.
+//
+// Zero dependencies beyond Node + git, so the skill directory stays portable:
+// copy it into any repo, no npm install. Runnable directly (executable, node
+// shebang) or via `node chapter-review <cmd>`.
+
+import { execFileSync } from "node:child_process";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { validateManifest } from "./validate.mjs";
+
+const SEVERITY = new Set(["critical", "high", "low"]);
+const ISSUE_STATUS = new Set(["open", "resolved"]);
+const CHAPTER_ID = /^ch-[0-9]+$/;
+
+function die(msg, code = 1) {
+  console.error(msg);
+  process.exit(code);
+}
+
+// Worktree-safe absolute git dir — matches how the extension resolves it, so
+// both sides land on the same chapter-review/ folder.
+function gitDir() {
+  try {
+    return execFileSync("git", ["rev-parse", "--absolute-git-dir"], {
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    die("chapter-review: not inside a git repository (git rev-parse failed).", 2);
+  }
+}
+
+const manifestPath = () => path.join(gitDir(), "chapter-review", "chapters.json");
+const focusPath = () => path.join(gitDir(), "chapter-review", "focus.json");
+
+function readManifestOrDie() {
+  const p = manifestPath();
+  if (!existsSync(p)) {
+    die(
+      "chapter-review: no manifest yet — run `chapter-review write` first."
+    );
+  }
+  try {
+    return JSON.parse(readFileSync(p, "utf8"));
+  } catch (e) {
+    die(`chapter-review: existing manifest is not valid JSON: ${e.message}`);
+  }
+}
+
+// Write-and-rename so the extension's file watcher never sees a half-file.
+// Validates first; an invalid manifest is refused, never written.
+function installManifest(manifest, onOk) {
+  const result = validateManifest(manifest);
+  if (!result.ok) {
+    console.error("chapter-review: change refused — the manifest would be invalid:");
+    for (const e of result.errors) console.error(`  - ${e}`);
+    process.exit(1);
+  }
+  const dest = manifestPath();
+  mkdirSync(path.dirname(dest), { recursive: true });
+  const tmp = `${dest}.tmp`;
+  writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  renameSync(tmp, dest);
+  onOk(result.stats);
+}
+
+// ---- issue ownership / remapping -------------------------------------------
+
+function spansOverlap(startA, lenA, startB, lenB) {
+  if (lenA === 0 || lenB === 0) return false;
+  return startA < startB + lenB && startB < startA + lenA;
+}
+function hunksOverlap(a, b) {
+  return (
+    spansOverlap(a.newStart, a.newLines, b.newStart, b.newLines) ||
+    spansOverlap(a.oldStart, a.oldLines, b.oldStart, b.oldLines)
+  );
+}
+
+function pathInManifest(manifest, p) {
+  return (
+    manifest.chapters.some((ch) => ch.files.some((f) => f.path === p)) ||
+    manifest.unassigned.some((f) => f.path === p)
+  );
+}
+
+// Which chapter should own an issue on `path` (with optional `hunk`)? Prefer a
+// still-valid prior chapterId for stability; otherwise the sole owner; on a
+// split path, the chapter whose hunks overlap; else best-effort first owner.
+// Returns undefined when the path lives only in unassigned or nowhere.
+function ownerChapterId(manifest, p, hunk, prevChapterId) {
+  const owners = manifest.chapters.filter((ch) =>
+    ch.files.some((f) => f.path === p)
+  );
+  if (owners.length === 0) return undefined;
+  if (owners.length === 1) return owners[0].id;
+  if (prevChapterId && owners.some((c) => c.id === prevChapterId)) {
+    return prevChapterId;
+  }
+  if (hunk) {
+    const match = owners.find((ch) =>
+      ch.files.some(
+        (f) => f.path === p && f.hunks && f.hunks.some((h) => hunksOverlap(h, hunk))
+      )
+    );
+    if (match) return match.id;
+  }
+  return owners[0].id;
+}
+
+// Carry issues from the old manifest into a freshly written partition: drop any
+// whose path no longer appears at all, and re-point chapterId at the new owner.
+function carryIssues(oldIssues, newManifest) {
+  const kept = [];
+  const pruned = [];
+  for (const issue of oldIssues) {
+    if (!pathInManifest(newManifest, issue.path)) {
+      pruned.push(issue.id);
+      continue;
+    }
+    const chapterId = ownerChapterId(
+      newManifest,
+      issue.path,
+      issue.hunk,
+      issue.chapterId
+    );
+    const next = { ...issue };
+    if (chapterId) next.chapterId = chapterId;
+    else delete next.chapterId;
+    kept.push(next);
+  }
+  return { kept, pruned };
+}
+
+function nextIssueId(issues) {
+  const max = issues.reduce((m, i) => {
+    const n = Number((/^iss-(\d+)$/.exec(i.id) || [])[1]);
+    return Number.isInteger(n) && n > m ? n : m;
+  }, 0);
+  return `iss-${max + 1}`;
+}
+
+// Assemble a manifest for output with a stable key order and issues last.
+function withIssues(manifest, issues) {
+  const out = {
+    version: manifest.version,
+    base: manifest.base,
+    head: manifest.head,
+    mergeBase: manifest.mergeBase,
+    ...(manifest.headSha !== undefined ? { headSha: manifest.headSha } : {}),
+    generatedAt: manifest.generatedAt,
+    ...(manifest.summary !== undefined ? { summary: manifest.summary } : {}),
+    chapters: manifest.chapters,
+    unassigned: manifest.unassigned,
+  };
+  if (issues.length > 0) out.issues = issues;
+  return out;
+}
+
+// ---- flag parsing ----------------------------------------------------------
+
+const FLAG_ALIASES = { "--old-path": "oldPath", "--chapter": "chapterId" };
+function parseFlags(argv, allowed) {
+  const out = {};
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i];
+    if (!tok.startsWith("--")) die(`chapter-review: unexpected argument "${tok}"`);
+    const key = FLAG_ALIASES[tok] || tok.slice(2);
+    if (!allowed.includes(key)) die(`chapter-review: unknown flag "${tok}"`);
+    const val = argv[++i];
+    if (val === undefined) die(`chapter-review: ${tok} needs a value`);
+    out[key] = val;
+  }
+  return out;
+}
+
+function parseHunk(spec) {
+  const parts = spec.split(",").map((s) => Number(s.trim()));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0)) {
+    die(
+      `chapter-review: --hunk must be "oldStart,oldLines,newStart,newLines" (got "${spec}")`
+    );
+  }
+  const [oldStart, oldLines, newStart, newLines] = parts;
+  return { oldStart, oldLines, newStart, newLines };
+}
+
+// Build the issue fields a flag set describes (validated at the field level;
+// full disjointness/schema checks happen when the manifest is installed).
+function issueFieldsFromFlags(flags) {
+  const fields = {};
+  if (flags.path !== undefined) fields.path = flags.path;
+  if (flags.oldPath !== undefined) fields.oldPath = flags.oldPath;
+  if (flags.note !== undefined) fields.note = flags.note;
+  if (flags.severity !== undefined) {
+    if (!SEVERITY.has(flags.severity)) {
+      die(`chapter-review: --severity must be one of ${[...SEVERITY].join(", ")}`);
+    }
+    fields.severity = flags.severity;
+  }
+  if (flags.chapterId !== undefined) {
+    if (!CHAPTER_ID.test(flags.chapterId)) {
+      die("chapter-review: --chapter must match ch-<number>");
+    }
+    fields.chapterId = flags.chapterId;
+  }
+  if (flags.status !== undefined) {
+    if (!ISSUE_STATUS.has(flags.status)) {
+      die(`chapter-review: --status must be one of ${[...ISSUE_STATUS].join(", ")}`);
+    }
+    fields.status = flags.status;
+  }
+  if (flags.hunk !== undefined) fields.hunk = parseHunk(flags.hunk);
+  return fields;
+}
+
+// ---- commands --------------------------------------------------------------
+
+function cmdFocus() {
+  const p = focusPath();
+  if (!existsSync(p)) {
+    console.log(
+      "No focus yet — the reviewer hasn't selected anything in the extension."
+    );
+    return;
+  }
+  process.stdout.write(readFileSync(p, "utf8"));
+}
+
+function cmdShow() {
+  const p = manifestPath();
+  if (!existsSync(p)) {
+    die("chapter-review: no manifest yet — nothing has been written for this branch.", 0);
+  }
+  process.stdout.write(readFileSync(p, "utf8"));
+}
+
+function cmdWrite(arg) {
+  const src = arg ?? 0; // fd 0 = stdin
+  let draft;
+  try {
+    draft = JSON.parse(readFileSync(src, "utf8"));
+  } catch (e) {
+    die(`chapter-review: could not read draft (${arg || "stdin"}): ${e.message}`);
+  }
+  if (Array.isArray(draft.issues) && draft.issues.length > 0) {
+    die(
+      "chapter-review: `write` takes the partition only. Record findings with " +
+        "`chapter-review issue add` — existing issues are preserved automatically."
+    );
+  }
+
+  const prior = existsSync(manifestPath()) ? readManifestOrDie() : null;
+  const priorIssues = prior && Array.isArray(prior.issues) ? prior.issues : [];
+  const { kept, pruned } = carryIssues(priorIssues, draft);
+
+  installManifest(withIssues(draft, kept), (stats) => {
+    let line = `Wrote ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
+    if (kept.length > 0) line += `, ${kept.length} issues preserved`;
+    if (pruned.length > 0) line += `, pruned ${pruned.length} (${pruned.join(", ")})`;
+    console.log(`${line} — the extension will pick it up.`);
+  });
+}
+
+function findIssue(manifest, id) {
+  const issues = Array.isArray(manifest.issues) ? manifest.issues : [];
+  const issue = issues.find((i) => i.id === id);
+  if (!issue) die(`chapter-review: no issue "${id}" in the manifest.`);
+  return { issues, issue };
+}
+
+function saveIssues(manifest, issues, onOk) {
+  installManifest(withIssues(manifest, issues), onOk);
+}
+
+function cmdIssue(sub, rest) {
+  const manifest = readManifestOrDie();
+  const issues = Array.isArray(manifest.issues) ? manifest.issues : [];
+
+  switch (sub) {
+    case "add": {
+      const flags = parseFlags(rest, [
+        "path",
+        "oldPath",
+        "note",
+        "severity",
+        "chapterId",
+        "status",
+        "hunk",
+      ]);
+      const fields = issueFieldsFromFlags(flags);
+      for (const req of ["path", "severity", "note"]) {
+        if (fields[req] === undefined) die(`chapter-review: issue add needs --${req === "chapterId" ? "chapter" : req}`);
+      }
+      const id = nextIssueId(issues);
+      // Infer the owning chapter from the path when not given. A --hunk picks
+      // the chapter that owns that range; on an ambiguous split (path in >1
+      // chapter, no hunk to match) we pick the first and say so.
+      if (fields.chapterId === undefined) {
+        const owners = manifest.chapters.filter((ch) =>
+          ch.files.some((f) => f.path === fields.path)
+        );
+        const inferred = ownerChapterId(manifest, fields.path, fields.hunk, undefined);
+        if (inferred) fields.chapterId = inferred;
+        if (owners.length > 1 && !fields.hunk) {
+          console.error(
+            `chapter-review: ${fields.path} spans ${owners.map((o) => o.id).join(", ")}; ` +
+              `recorded in ${inferred}. Pass --chapter to choose, or --hunk to match by range.`
+          );
+        }
+      }
+      const issue = { id, ...fields };
+      saveIssues(manifest, [...issues, issue], () =>
+        console.log(`Added ${id} (${issue.severity}) on ${issue.path}${issue.chapterId ? ` in ${issue.chapterId}` : ""}.`)
+      );
+      break;
+    }
+    case "set": {
+      const [id, ...flagArgs] = rest;
+      if (!id) die("chapter-review: issue set needs an issue id.");
+      const { issue } = findIssue(manifest, id);
+      const flags = parseFlags(flagArgs, [
+        "path",
+        "oldPath",
+        "note",
+        "severity",
+        "chapterId",
+        "status",
+        "hunk",
+      ]);
+      Object.assign(issue, issueFieldsFromFlags(flags));
+      saveIssues(manifest, issues, () => console.log(`Updated ${id}.`));
+      break;
+    }
+    case "resolve":
+    case "reopen": {
+      const [id] = rest;
+      if (!id) die(`chapter-review: issue ${sub} needs an issue id.`);
+      const { issue } = findIssue(manifest, id);
+      issue.status = sub === "resolve" ? "resolved" : "open";
+      saveIssues(manifest, issues, () =>
+        console.log(`${sub === "resolve" ? "Resolved" : "Reopened"} ${id}.`)
+      );
+      break;
+    }
+    case "rm": {
+      const [id] = rest;
+      if (!id) die("chapter-review: issue rm needs an issue id.");
+      findIssue(manifest, id); // errors if missing
+      saveIssues(manifest, issues.filter((i) => i.id !== id), () =>
+        console.log(`Removed ${id}.`)
+      );
+      break;
+    }
+    case "list": {
+      if (issues.length === 0) {
+        console.log("No issues recorded.");
+        break;
+      }
+      for (const i of issues) {
+        const status = i.status === "resolved" ? "resolved" : "open";
+        console.log(
+          `${i.id}  [${i.severity}/${status}]  ${i.path}${i.chapterId ? ` (${i.chapterId})` : ""}\n    ${i.note}`
+        );
+      }
+      break;
+    }
+    default:
+      die(`chapter-review: unknown issue command "${sub || ""}" (add|set|resolve|reopen|rm|list)`);
+  }
+}
+
+function usage(code) {
+  console.error(
+    [
+      "usage: chapter-review <command>",
+      "",
+      "  focus                     print what the reviewer is looking at",
+      "  show                      print the current manifest",
+      "  write [file]              validate a partition draft, then install it (stdin if no file)",
+      "  issue add    <flags>      record a finding (--path --severity --note [--chapter --hunk --old-path])",
+      "  issue set    <id> <flags> revise a finding",
+      "  issue resolve <id>        mark a finding resolved",
+      "  issue reopen  <id>        reopen a finding",
+      "  issue rm     <id>         drop a finding",
+      "  issue list                list findings",
+    ].join("\n")
+  );
+  process.exit(code);
+}
+
+const [cmd, ...rest] = process.argv.slice(2);
+switch (cmd) {
+  case "focus":
+    cmdFocus();
+    break;
+  case "show":
+    cmdShow();
+    break;
+  case "write":
+    cmdWrite(rest[0]);
+    break;
+  case "issue":
+    cmdIssue(rest[0], rest.slice(1));
+    break;
+  case "help":
+  case "--help":
+  case "-h":
+    usage(0);
+    break;
+  default:
+    if (cmd) console.error(`chapter-review: unknown command "${cmd}"\n`);
+    usage(1);
+}

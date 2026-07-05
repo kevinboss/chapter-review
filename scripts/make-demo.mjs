@@ -10,7 +10,7 @@
 // CLI: node scripts/make-demo.mjs [--manifest]
 
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { validateManifest } from "../.claude/skills/chapter-review/validate.mjs";
@@ -55,8 +55,19 @@ git("commit", "-m", "Queue-based notifications; rename Guard to Ensure");
 const mergeBase = git("rev-parse", "main");
 const headSha = git("rev-parse", "HEAD");
 
+// Install the skill into the demo repo so it can be tried out there directly,
+// the way the extension installs it into a real workspace. Copied after both
+// commits (so it's untracked, never part of the reviewed diff) and hidden via
+// .git/info/exclude so `git status` stays clean and it can't leak into a
+// partition. Only chapter-review — the demo/release skills are repo chores.
+const skillSrc = path.join(root, ".claude", "skills", "chapter-review");
+const skillDest = path.join(demo, ".claude", "skills", "chapter-review");
+cpSync(skillSrc, skillDest, { recursive: true });
+appendFileSync(path.join(git("rev-parse", "--absolute-git-dir"), "info", "exclude"), ".claude/\n");
+
 if (!process.argv.includes("--manifest")) {
   console.log(`demo/ rebuilt at ${mergeBase.slice(0, 8)}..feat/queue-notifications`);
+  console.log("skill installed at demo/.claude/skills/chapter-review (hidden via .git/info/exclude)");
   console.log(
     "No chapters.json written — run the chapter-review skill against demo/ to generate it,"
   );
