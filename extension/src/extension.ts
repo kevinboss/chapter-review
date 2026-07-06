@@ -11,7 +11,7 @@ import {
 } from "./gitContent";
 import { allEntries, entryKeys, parseManifest } from "./model";
 import { ReviewProgress } from "./progress";
-import { checkSkill, installSkill } from "./skillInstaller";
+import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
 import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, nodeKeys, ViewMode } from "./tree";
 
 // Relative to the repo's git dir: tool state lives inside .git, invisible to
@@ -23,9 +23,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // The skill installer needs neither a git repo nor a manifest, so register
   // it first and let the rest bail out early on non-git workspaces.
   context.subscriptions.push(
-    vscode.commands.registerCommand("chapterReview.installSkill", () => installSkill(context))
+    vscode.commands.registerCommand("chapterReview.installSkill", () => installSkill(context)),
+    vscode.commands.registerCommand("chapterReview.updateSkill", () => installSkill(context))
   );
   void checkSkill(context);
+  void refreshSkillContext(context);
 
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) {

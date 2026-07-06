@@ -86,6 +86,7 @@ async function writeSkill(context: vscode.ExtensionContext, target: InstallTarge
     );
     return;
   }
+  await refreshSkillContext(context);
   const choice = await vscode.window.showInformationMessage(
     `Chapter Review skill installed to ${target.detail}. Restart your coding agent if it was already running so it loads the skill.`,
     "Show folder"
@@ -93,6 +94,66 @@ async function writeSkill(context: vscode.ExtensionContext, target: InstallTarge
   if (choice === "Show folder") {
     void vscode.commands.executeCommand("revealFileInOS", target.dir);
   }
+}
+
+export type SkillStatus = "missing" | "present" | "current";
+
+/**
+ * Skill state relative to the bundled copy, from the installed versions found
+ * across the install targets. The skill version is the extension's version
+ * (stamped at bundle time), so it is monotonic and semver-comparable:
+ *   - "current": a copy at or beyond the bundled version exists (nothing to do),
+ *     or there is no bundled skill to offer at all;
+ *   - "present": a copy exists but every copy is strictly older (offer update);
+ *   - "missing": no copy exists anywhere (offer a fresh install).
+ * A newer install reads as "current": never prompt a downgrade to a checkout
+ * that happens to lag the release the user installed from.
+ */
+export function computeSkillStatus(
+  bundledVersion: string | undefined,
+  installedVersions: ReadonlyArray<string | undefined>
+): SkillStatus {
+  if (!bundledVersion) {
+    return "current"; // no bundled skill: nothing to offer
+  }
+  const present = installedVersions.filter((v): v is string => !!v);
+  if (present.length === 0) {
+    return "missing";
+  }
+  return present.some((v) => compareVersions(v, bundledVersion) >= 0) ? "current" : "present";
+}
+
+/** Compare major.minor.patch; any -prerelease/+build suffix is ignored. */
+function compareVersions(a: string, b: string): number {
+  const pa = versionParts(a);
+  const pb = versionParts(b);
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) {
+      return d < 0 ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
+function versionParts(v: string): number[] {
+  return v.split(/[.+-]/, 3).map((p) => Number.parseInt(p, 10) || 0);
+}
+
+/**
+ * Sets the chapterReview.skillStatus context key, which gates the install/update
+ * affordances (view-title menu, welcome link): "Install" when missing, "Update"
+ * when a different version is present, and nothing when current.
+ */
+export async function refreshSkillContext(context: vscode.ExtensionContext): Promise<void> {
+  const bundledVersion = await readSkillVersion(
+    vscode.Uri.joinPath(bundledSkillDir(context), "SKILL.md")
+  );
+  const installed = await Promise.all(
+    installTargets().map((t) => readSkillVersion(vscode.Uri.joinPath(t.dir, "SKILL.md")))
+  );
+  const status = computeSkillStatus(bundledVersion, installed);
+  await vscode.commands.executeCommand("setContext", "chapterReview.skillStatus", status);
 }
 
 /** Command entry point: pick a location (or use the given scope) and install. */
