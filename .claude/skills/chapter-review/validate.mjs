@@ -17,8 +17,10 @@ const SHA = /^[0-9a-f]{7,40}$/;
 const CHAPTER_ID = /^ch-[0-9]+$/;
 const ISSUE_ID = /^iss-[0-9]+$/;
 const PATH = /^[^/]/; // repo-relative, no leading slash
+// ISO-8601 date-time with a required zone (Z or offset); seconds optional, so a
+// minute-precision stamp like 2026-07-06T12:22Z is accepted, not just RFC-3339.
 const ISO_8601 =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
 
 const isObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
 

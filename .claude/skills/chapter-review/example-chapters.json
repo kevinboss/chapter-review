@@ -2,7 +2,7 @@
   "version": 1,
   "base": "main",
   "head": "feat/auth-rewrite",
-  "mergeBase": "a1b2c3d4",
+  "mergeBase": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
   "headSha": "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432",
   "generatedAt": "2026-06-01T12:00:00Z",
   "summary": "Replace session-token middleware; add OIDC provider.",

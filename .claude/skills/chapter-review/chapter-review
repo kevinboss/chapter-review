@@ -90,7 +90,7 @@ function installManifest(manifest, onOk) {
   const tmp = `${dest}.tmp`;
   writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n", "utf8");
   renameSync(tmp, dest);
-  onOk(result.stats);
+  onOk(result.stats, dest);
 }
 
 // ---- issue ownership / remapping -------------------------------------------
@@ -283,11 +283,12 @@ function cmdWrite(arg) {
   const priorIssues = prior && Array.isArray(prior.issues) ? prior.issues : [];
   const { kept, pruned } = carryIssues(priorIssues, draft);
 
-  installManifest(withIssues(draft, kept), (stats) => {
+  installManifest(withIssues(draft, kept), (stats, dest) => {
     let line = `Wrote ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
     if (kept.length > 0) line += `, ${kept.length} issues preserved`;
     if (pruned.length > 0) line += `, pruned ${pruned.length} (${pruned.join(", ")})`;
     console.log(`${line} — the extension will pick it up.`);
+    console.log(`  wrote ${dest}`);
   });
 }
 
@@ -331,11 +332,28 @@ function cmdIssue(sub, rest) {
         );
         const inferred = ownerChapterId(manifest, fields.path, fields.hunk, undefined);
         if (inferred) fields.chapterId = inferred;
-        if (owners.length > 1 && !fields.hunk) {
-          console.error(
-            `chapter-review: ${fields.path} spans ${owners.map((o) => o.id).join(", ")}; ` +
-              `recorded in ${inferred}. Pass --chapter to choose, or --hunk to match by range.`
-          );
+        // Warn whenever the owner had to be guessed: no --hunk on a split path,
+        // or a --hunk that overlaps none of the owning ranges (a typo'd range
+        // would otherwise land the finding in the wrong chapter silently).
+        if (owners.length > 1) {
+          const hunkMatched =
+            fields.hunk &&
+            owners.some((ch) =>
+              ch.files.some(
+                (f) =>
+                  f.path === fields.path &&
+                  f.hunks &&
+                  f.hunks.some((h) => hunksOverlap(h, fields.hunk))
+              )
+            );
+          if (!hunkMatched) {
+            console.error(
+              `chapter-review: ${fields.path} spans ${owners.map((o) => o.id).join(", ")}; ` +
+                `recorded in ${inferred}. ` +
+                `${fields.hunk ? "The --hunk matched no owning range; " : ""}` +
+                `pass --chapter to choose, or --hunk to match by range.`
+            );
+          }
         }
       }
       const issue = { id, ...fields };
