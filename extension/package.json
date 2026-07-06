@@ -43,7 +43,18 @@
     "viewsWelcome": [
       {
         "view": "chapterReview",
-        "contents": "No chapter manifest found (.git/chapter-review/chapters.json).\nGenerate one with the chapter-review skill in your coding agent, then this view renders the branch as reviewable chapters.\n[Install or update the skill](command:chapterReview.installSkill)"
+        "when": "!chapterReview.skillStatus || chapterReview.skillStatus == missing",
+        "contents": "No chapter manifest found (.git/chapter-review/chapters.json).\nGenerate one with the chapter-review skill in your coding agent, then this view renders the branch as reviewable chapters.\n[Install the skill](command:chapterReview.installSkill)"
+      },
+      {
+        "view": "chapterReview",
+        "when": "chapterReview.skillStatus == present",
+        "contents": "No chapter manifest found (.git/chapter-review/chapters.json).\nGenerate one with the chapter-review skill in your coding agent, then this view renders the branch as reviewable chapters.\n[Update the skill](command:chapterReview.updateSkill)"
+      },
+      {
+        "view": "chapterReview",
+        "when": "chapterReview.skillStatus == current",
+        "contents": "No chapter manifest found (.git/chapter-review/chapters.json).\nGenerate one with the chapter-review skill in your coding agent, then this view renders the branch as reviewable chapters."
       }
     ],
     "commands": [
@@ -77,7 +88,12 @@
       },
       {
         "command": "chapterReview.installSkill",
-        "title": "Install or Update Skill",
+        "title": "Install Skill",
+        "category": "Chapter Review"
+      },
+      {
+        "command": "chapterReview.updateSkill",
+        "title": "Update Skill",
         "category": "Chapter Review"
       },
       {
@@ -121,7 +137,11 @@
         },
         {
           "command": "chapterReview.installSkill",
-          "when": "view == chapterReview"
+          "when": "view == chapterReview && (!chapterReview.skillStatus || chapterReview.skillStatus == missing)"
+        },
+        {
+          "command": "chapterReview.updateSkill",
+          "when": "view == chapterReview && chapterReview.skillStatus == present"
         }
       ],
       "editor/title": [
@@ -149,6 +169,10 @@
         },
         {
           "command": "chapterReview.openFile",
+          "when": "false"
+        },
+        {
+          "command": "chapterReview.updateSkill",
           "when": "false"
         },
         {

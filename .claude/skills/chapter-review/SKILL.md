@@ -1,8 +1,6 @@
 ---
 name: chapter-review
 description: Group the current branch's changes into logical "chapters" for review. Writes the chapter manifest to <git-dir>/chapter-review/chapters.json (inside .git, so the worktree stays clean), which the chapter-review VSCode extension renders as a reviewable tree. Use when the user wants to review a branch chapter by chapter, prepare a PR for self-review, or split a sprawling branch into a reviewable narrative.
-metadata:
-  version: 1.0.0
 ---
 
 # Chapter review
