@@ -1,0 +1,62 @@
+import { Chapter, entryKeys, FileEntry, Hunk, Issue, reviewKey, UnassignedEntry } from "../model";
+
+export type ViewMode = "tree" | "list";
+
+export interface ChapterNode {
+  kind: "chapter";
+  chapter: Chapter;
+}
+export interface UnassignedRootNode {
+  kind: "unassignedRoot";
+}
+export interface FolderNode {
+  kind: "folder";
+  ownerId: string;
+  label: string;
+  children: (FolderNode | FileNode)[];
+}
+export interface FileNode {
+  kind: "file";
+  ownerId: string; // chapter id or "unassigned"; a path may appear under several owners
+  entry: FileEntry | UnassignedEntry;
+}
+export interface HunkNode {
+  kind: "hunk";
+  ownerId: string;
+  entry: FileEntry | UnassignedEntry;
+  hunk: Hunk;
+  index: number;
+}
+export interface IssueNode {
+  kind: "issue";
+  issue: Issue;
+}
+export interface IssuesRootNode {
+  kind: "issuesRoot";
+}
+
+export type Node =
+  | ChapterNode
+  | UnassignedRootNode
+  | FolderNode
+  | FileNode
+  | HunkNode
+  | IssueNode
+  | IssuesRootNode;
+
+/** What the tree needs from review progress (ReviewProgress satisfies it). */
+export interface ProgressReader {
+  isReviewed(key: string): boolean;
+}
+
+/** Review keys a node stands for (used when its checkbox is toggled). */
+export function nodeKeys(node: Node): string[] {
+  switch (node.kind) {
+    case "file":
+      return entryKeys(node.entry);
+    case "hunk":
+      return [reviewKey(node.entry.path, node.hunk)];
+    default:
+      return [];
+  }
+}

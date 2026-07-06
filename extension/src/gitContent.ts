@@ -56,7 +56,7 @@ export function gitUri(ref: string, path: string): vscode.Uri {
 }
 
 /**
- * Holds the chapter-scoped virtual documents built by openDiff (merge-base
+ * Holds the chapter-scoped virtual documents built by the DiffViewer (merge-base
  * content plus only the chapter's hunks). Keyed by URI; re-opening a diff
  * overwrites the entry and fires a change so an open editor refreshes.
  */
