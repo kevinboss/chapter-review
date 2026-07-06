@@ -7,6 +7,7 @@ import {
   PATCHED_SCHEME,
   PatchedContentProvider,
   resolveGitDir,
+  reviewUriPath,
 } from "./gitContent";
 import { allEntries, entryKeys, parseManifest } from "./model";
 import { ReviewProgress } from "./progress";
@@ -87,6 +88,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     provider.refresh();
   }
 
+  // The resource behind the active editor: the modified side of a diff, or a
+  // plain editor's document. Used to recover the real file from a diff view.
+  function activeReviewUri(): vscode.Uri | undefined {
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input as
+      | { modified?: vscode.Uri; uri?: vscode.Uri }
+      | undefined;
+    return input?.modified ?? input?.uri;
+  }
+
+  // Opens the real working-tree file behind a diff side, at the current line.
+  async function openFile(arg?: vscode.Uri): Promise<void> {
+    const uri = arg && reviewUriPath(arg) ? arg : activeReviewUri();
+    const rel = uri && reviewUriPath(uri);
+    if (!rel) {
+      return;
+    }
+    const selection = vscode.window.activeTextEditor?.selection;
+    try {
+      const doc = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folderUri, rel));
+      await vscode.window.showTextDocument(doc, selection ? { selection } : {});
+    } catch {
+      void vscode.window.showWarningMessage(`Chapter Review: could not open ${rel}`);
+    }
+  }
+
   // Opening an issue both shows its diff and records it as the current focus.
   async function openIssue(node: IssueNode): Promise<void> {
     await diffViewer.openIssue(node);
@@ -147,6 +173,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("chapterReview.openDiff", (node: FileNode | HunkNode) =>
       diffViewer.openDiff(node)
     ),
+    vscode.commands.registerCommand("chapterReview.openFile", openFile),
     vscode.commands.registerCommand("chapterReview.openIssue", openIssue),
     vscode.commands.registerCommand("chapterReview.resolveIssue", resolveIssue),
     vscode.commands.registerCommand("chapterReview.resetProgress", async () => {

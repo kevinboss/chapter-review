@@ -56,6 +56,26 @@ export function gitUri(ref: string, path: string): vscode.Uri {
 }
 
 /**
+ * The workspace-relative file path encoded in one of our review URIs (git or
+ * patched), or undefined for anything else. Lets "Open File" recover the real
+ * file behind a virtual diff side.
+ */
+export function reviewUriPath(uri: vscode.Uri): string | undefined {
+  if (uri.scheme === GIT_SCHEME) {
+    try {
+      return (JSON.parse(uri.query) as { path: string }).path;
+    } catch {
+      return undefined;
+    }
+  }
+  if (uri.scheme === PATCHED_SCHEME) {
+    // path is /<ownerId>/<relPath>; ownerId never contains a slash.
+    return uri.path.replace(/^\/+/, "").match(/^[^/]+\/(.+)$/)?.[1];
+  }
+  return undefined;
+}
+
+/**
  * Holds the chapter-scoped virtual documents built by the DiffViewer (merge-base
  * content plus only the chapter's hunks). Keyed by URI; re-opening a diff
  * overwrites the entry and fires a change so an open editor refreshes.
