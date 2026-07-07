@@ -12,6 +12,7 @@ import {
 import { allEntries, entryKeys, parseManifest } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
+import { checkStaleness } from "./staleness";
 import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, nodeKeys, ViewMode } from "./tree";
 
 // Relative to the repo's git dir: tool state lives inside .git, invisible to
@@ -79,6 +80,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(`Chapter Review: ${(e as Error).message}`);
       }
     }
+    await refreshStaleness();
+  }
+
+  // Re-checks whether the manifest's pinned commit still matches the branch and
+  // repaints. Cheap (a couple of git calls), so the HEAD watcher and the
+  // window-focus net can call it directly without re-reading the manifest.
+  async function refreshStaleness(): Promise<void> {
+    provider.staleness = provider.manifest
+      ? await checkStaleness(folderUri.fsPath, provider.manifest)
+      : undefined;
     provider.refresh();
     updateSummary();
   }
@@ -194,6 +205,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   watcher.onDidChange(reload);
   watcher.onDidDelete(reload);
   context.subscriptions.push(watcher);
+
+  // Live staleness: a commit, amend, rebase or checkout in the terminal moves
+  // HEAD or the branch ref, both files under the git dir. Re-check on those,
+  // and on window focus as a safety net for OSes where .git watches are flaky.
+  const headWatcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(gitDirUri, "{HEAD,refs/heads/**,packed-refs}")
+  );
+  headWatcher.onDidCreate(refreshStaleness);
+  headWatcher.onDidChange(refreshStaleness);
+  headWatcher.onDidDelete(refreshStaleness);
+  context.subscriptions.push(
+    headWatcher,
+    vscode.window.onDidChangeWindowState((s) => {
+      if (s.focused) {
+        void refreshStaleness();
+      }
+    })
+  );
 
   void reload();
 }

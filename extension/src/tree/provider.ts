@@ -11,6 +11,7 @@ import {
   reviewKey,
   UnassignedEntry,
 } from "../model";
+import { Staleness } from "../staleness";
 import { buildFolderTree } from "./folderTree";
 import { FileNode, HunkNode, IssueNode, Node, ProgressReader, ViewMode } from "./nodes";
 
@@ -24,6 +25,9 @@ const STATUS_LETTER: Record<string, string> = {
 export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   private readonly changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
+
+  /** Set by the host when the manifest's pinned commit diverges from the branch. */
+  staleness: Staleness | undefined;
 
   constructor(
     private readonly workspaceRoot: vscode.Uri,
@@ -50,6 +54,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       }
       if (this.orphanIssues().length > 0) {
         roots.push({ kind: "issuesRoot" });
+      }
+      if (this.staleness?.stale) {
+        roots.unshift({ kind: "staleWarning" });
       }
       return roots;
     }
@@ -82,6 +89,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       }
       case "hunk":
       case "issue":
+      case "staleWarning":
         return [];
     }
   }
@@ -143,7 +151,24 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
         return this.issueItem(node);
       case "issuesRoot":
         return this.issuesRootItem();
+      case "staleWarning":
+        return this.staleWarningItem();
     }
+  }
+
+  private staleWarningItem(): vscode.TreeItem {
+    const item = new vscode.TreeItem(
+      this.staleness?.summary ?? "Review may be out of date",
+      vscode.TreeItemCollapsibleState.None
+    );
+    item.id = "staleWarning";
+    item.iconPath = new vscode.ThemeIcon(
+      "warning",
+      new vscode.ThemeColor("list.warningForeground")
+    );
+    item.tooltip = this.staleness?.detail;
+    item.command = { command: "chapterReview.refresh", title: "Re-check", arguments: [] };
+    return item;
   }
 
   private chapterItem(chapter: Chapter): vscode.TreeItem {

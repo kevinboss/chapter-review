@@ -32,6 +32,28 @@ export function gitShow(repoRoot: string, ref: string, path: string): Promise<st
   });
 }
 
+/** `git rev-parse <ref>` → full SHA, or undefined if it can't be resolved. */
+export function gitRevParse(repoRoot: string, ref: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile("git", ["rev-parse", ref], { cwd: repoRoot }, (err, stdout) =>
+      resolve(err ? undefined : stdout.trim() || undefined)
+    );
+  });
+}
+
+/** `git merge-base <a> <b>` → SHA, or undefined if there is no common ancestor. */
+export function gitMergeBase(
+  repoRoot: string,
+  a: string,
+  b: string
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile("git", ["merge-base", a, b], { cwd: repoRoot }, (err, stdout) =>
+      resolve(err ? undefined : stdout.trim() || undefined)
+    );
+  });
+}
+
 /**
  * Serves file content at a fixed ref, so diffs against the merge base need no
  * coupling to the built-in git extension. URI form:
