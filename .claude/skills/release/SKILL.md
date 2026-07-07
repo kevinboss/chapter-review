@@ -20,7 +20,7 @@ Cut a version tag; GitHub Actions (`.github/workflows/release.yml`) does the bui
 
 4. **Commit.** Stage `extension/package.json` and `extension/package-lock.json` only; commit `Release vX.Y.Z` (subject plus a couple of "why" bullets if the release is notable). Do not add a `Co-Authored-By` line.
 
-5. **Tag and push.** `git tag vX.Y.Z` then `git push origin main --follow-tags`. The tag must be exactly `v` + the `extension/package.json` version — the workflow fails the release otherwise.
+5. **Tag and push.** Create an *annotated* tag: `git tag -a vX.Y.Z -m "vX.Y.Z"`. This matters: `git push --follow-tags` only pushes annotated tags, so a lightweight `git tag vX.Y.Z` never reaches origin and the workflow silently fails to trigger. Then `git push origin main --follow-tags`. Confirm the tag actually landed with `git ls-remote --tags origin vX.Y.Z` (must be non-empty); if it's empty, push it explicitly with `git push origin vX.Y.Z`. The tag must be exactly `v` + the `extension/package.json` version, or the workflow fails the release.
 
 6. **Watch the pipeline.** The tag push triggers the Release workflow. Report its URL (`gh run list --workflow=Release --limit 1`), optionally `gh run watch <id>`. It builds the `.vsix`, zips the skill, and attaches both to a GitHub Release with auto-generated notes.
 
