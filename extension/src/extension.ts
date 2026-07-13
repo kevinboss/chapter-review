@@ -9,11 +9,11 @@ import {
   resolveGitDir,
   reviewUriPath,
 } from "./gitContent";
-import { allEntries, entryKeys, parseManifest } from "./model";
+import { allEntries, entryKeys, isOpen, parseManifest } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
 import { checkStaleness } from "./staleness";
-import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, nodeKeys, ViewMode } from "./tree";
+import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, ViewMode } from "./tree";
 
 // Relative to the repo's git dir: tool state lives inside .git, invisible to
 // git status and impossible to commit by accident.
@@ -53,6 +53,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const view = vscode.window.createTreeView("chapterReview", {
     treeDataProvider: provider,
     showCollapseAll: true,
+    // Containers (chapter/folder) and issues carry checkboxes backed by two
+    // separate stores, so we drive parent/child state ourselves rather than
+    // letting VS Code cascade a chapter tick into resolving its issues.
+    manageCheckboxStateManually: true,
   });
 
   const diffViewer = new DiffViewer(folderUri, patchedDocs, () => provider.manifest);
@@ -135,13 +139,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
-  async function resolveIssue(node: IssueNode): Promise<void> {
+  // Applies the checked/unchecked state of issue checkboxes to the manifest in
+  // a single write. Issue state lives in chapters.json (the skill reads it
+  // back), separate from the per-user review-progress store used by files.
+  async function setIssuesResolved(updates: { id: string; resolved: boolean }[]): Promise<void> {
     const m = provider.manifest;
-    const issue = m?.issues?.find((i) => i.id === node.issue.id);
-    if (!m || !issue) {
+    if (!m?.issues) {
       return;
     }
-    issue.status = issue.status === "resolved" ? "open" : "resolved";
+    let changed = false;
+    for (const { id, resolved } of updates) {
+      const issue = m.issues.find((i) => i.id === id);
+      if (issue && !isOpen(issue) !== resolved) {
+        issue.status = resolved ? "resolved" : "open";
+        changed = true;
+      }
+    }
+    if (!changed) {
+      return;
+    }
     try {
       await vscode.workspace.fs.writeFile(
         manifestUri,
@@ -164,11 +180,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.workspace.registerTextDocumentContentProvider(PATCHED_SCHEME, patchedDocs),
     view.onDidChangeCheckboxState(async (e) => {
-      for (const [node, state] of e.items) {
-        await progress.setReviewed(
-          nodeKeys(node as Node),
-          state === vscode.TreeItemCheckboxState.Checked
-        );
+      const issueUpdates: { id: string; resolved: boolean }[] = [];
+      for (const [n, state] of e.items) {
+        const node = n as Node;
+        const checked = state === vscode.TreeItemCheckboxState.Checked;
+        if (node.kind === "issue") {
+          issueUpdates.push({ id: node.issue.id, resolved: checked });
+        } else {
+          await progress.setReviewed(provider.reviewKeysFor(node), checked);
+        }
+      }
+      if (issueUpdates.length > 0) {
+        await setIssuesResolved(issueUpdates);
       }
       provider.refresh();
       updateSummary();
@@ -188,7 +211,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("chapterReview.openFile", openFile),
     vscode.commands.registerCommand("chapterReview.openIssue", openIssue),
-    vscode.commands.registerCommand("chapterReview.resolveIssue", resolveIssue),
     vscode.commands.registerCommand("chapterReview.resetProgress", async () => {
       await progress.clear();
       provider.refresh();

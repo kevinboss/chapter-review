@@ -13,7 +13,7 @@ import {
 } from "../model";
 import { Staleness } from "../staleness";
 import { buildFolderTree } from "./folderTree";
-import { FileNode, HunkNode, IssueNode, Node, ProgressReader, ViewMode } from "./nodes";
+import { FileNode, folderFileKeys, HunkNode, IssueNode, Node, ProgressReader, ViewMode } from "./nodes";
 
 const STATUS_LETTER: Record<string, string> = {
   added: "A",
@@ -38,6 +38,40 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
 
   refresh(): void {
     this.changed.fire();
+  }
+
+  /**
+   * Review-progress keys a node's checkbox stands for. A file/hunk yields its
+   * own unit; a chapter, folder or the unassigned root yields every file unit
+   * beneath it, so ticking a container completes all its files at once. Empty
+   * for nodes tracked elsewhere (issues) or with nothing beneath them.
+   */
+  reviewKeysFor(node: Node): string[] {
+    switch (node.kind) {
+      case "file":
+        return entryKeys(node.entry);
+      case "hunk":
+        return [reviewKey(node.entry.path, node.hunk)];
+      case "chapter":
+        return node.chapter.files.flatMap(entryKeys);
+      case "unassignedRoot":
+        return (this.manifest?.unassigned ?? []).flatMap(entryKeys);
+      case "folder":
+        return folderFileKeys(node);
+      default:
+        return [];
+    }
+  }
+
+  /** Checkbox state for a node backed by review keys, or none if it has zero. */
+  private checkbox(node: Node): vscode.TreeItemCheckboxState | undefined {
+    const keys = this.reviewKeysFor(node);
+    if (keys.length === 0) {
+      return undefined;
+    }
+    return keys.every((k) => this.progress.isReviewed(k))
+      ? vscode.TreeItemCheckboxState.Checked
+      : vscode.TreeItemCheckboxState.Unchecked;
   }
 
   getChildren(node?: Node): Node[] {
@@ -141,6 +175,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
           vscode.TreeItemCollapsibleState.Expanded
         );
         item.iconPath = vscode.ThemeIcon.Folder;
+        item.checkboxState = this.checkbox(node);
         return item;
       }
       case "file":
@@ -184,6 +219,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     item.iconPath = new vscode.ThemeIcon(
       open > 0 ? "warning" : done === total ? "pass-filled" : "book"
     );
+    item.checkboxState = this.checkbox({ kind: "chapter", chapter });
     if (chapter.description) {
       item.tooltip = chapter.description;
     }
@@ -199,6 +235,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     const { done, total } = this.countUnits(this.manifest?.unassigned ?? []);
     item.description = `${done}/${total}`;
     item.iconPath = new vscode.ThemeIcon("archive");
+    item.checkboxState = this.checkbox({ kind: "unassignedRoot" });
     item.tooltip = "Noise quarantined by the skill (lockfiles, generated code, autoformat)";
     return item;
   }
@@ -241,9 +278,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
         .join("\n");
     }
 
-    item.checkboxState = entryKeys(entry).every((k) => this.progress.isReviewed(k))
-      ? vscode.TreeItemCheckboxState.Checked
-      : vscode.TreeItemCheckboxState.Unchecked;
+    item.checkboxState = this.checkbox(node);
 
     item.command = {
       command: "chapterReview.openDiff",
@@ -262,9 +297,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     item.id = `${node.ownerId}:${node.entry.path}#${node.index}`;
     item.description = `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`;
     item.iconPath = new vscode.ThemeIcon("diff");
-    item.checkboxState = this.progress.isReviewed(reviewKey(node.entry.path, h))
-      ? vscode.TreeItemCheckboxState.Checked
-      : vscode.TreeItemCheckboxState.Unchecked;
+    item.checkboxState = this.checkbox(node);
     item.command = {
       command: "chapterReview.openDiff",
       title: "Open Diff",
@@ -281,7 +314,11 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     item.description = resolved ? `${issue.severity} · resolved` : issue.severity;
     item.tooltip = `${issue.severity.toUpperCase()}${resolved ? " (resolved)" : ""}: ${issue.note}\n${issue.path}`;
     item.iconPath = issueIcon(issue);
-    item.contextValue = "chapterReviewIssue";
+    // Same checkbox affordance as files: ticked means resolved. Its toggle is
+    // routed to the manifest (not review progress) by the checkbox handler.
+    item.checkboxState = resolved
+      ? vscode.TreeItemCheckboxState.Checked
+      : vscode.TreeItemCheckboxState.Unchecked;
     item.command = {
       command: "chapterReview.openIssue",
       title: "Open Issue",
@@ -312,18 +349,21 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 }
 
+// Every issue node keeps an icon so it reads as an issue at a glance. The
+// neutral (i) is the baseline flag; open critical/high swap in a colored
+// severity glyph. Resolved state and exact severity live in the checkbox and
+// the row description, so resolved issues fall back to (i) rather than a
+// redundant checkmark.
 function issueIcon(issue: Issue): vscode.ThemeIcon {
-  if (issue.status === "resolved") {
-    return new vscode.ThemeIcon("check");
-  }
-  switch (issue.severity) {
-    case "critical":
+  if (issue.status !== "resolved") {
+    if (issue.severity === "critical") {
       return new vscode.ThemeIcon("error");
-    case "high":
+    }
+    if (issue.severity === "high") {
       return new vscode.ThemeIcon("warning");
-    default:
-      return new vscode.ThemeIcon("info");
+    }
   }
+  return new vscode.ThemeIcon("info");
 }
 
 function hunkLabel(h: Hunk): string {

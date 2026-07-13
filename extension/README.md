@@ -13,7 +13,7 @@ The manifest is produced by the companion **chapter-review skill**, which you ru
 
 1. In your coding agent, run the chapter-review skill on the branch you want to review. It writes the chapter manifest.
 2. Open the Source Control side bar. The **Chapters** view lists the chapters; expand one to see its files and hunks.
-3. Click a file or hunk to open its diff, scoped to that chapter. Tick the checkboxes as you review; progress is saved per hunk.
+3. Click a file or hunk to open its diff, scoped to that chapter. Tick the checkboxes as you review; progress is saved per hunk. Tick a chapter or folder to complete everything beneath it at once, and tick an issue to mark it resolved.
 
 If the view says "No chapter manifest found", the skill hasn't generated one for this repo yet.
 
@@ -22,7 +22,8 @@ If the view says "No chapter manifest found", the skill hasn't generated one for
 - **Chapters** view in the Source Control panel: chapters → files → hunks, with an Unassigned bucket for quarantined noise (lockfiles, generated code, autoformat).
 - Tree/list toggle for the files inside a chapter, mirroring the native git views.
 - Chapter-scoped diffs: a file or hunk opens a diff showing only that chapter's changes, even when other chapters touch the same file. The cursor lands on the first changed line.
-- Review progress via native checkboxes on files and hunks, keyed by hunk position so it survives manifest regeneration for unchanged hunks. Per-chapter counts plus an overall "N of M reviewed".
+- Review progress via native checkboxes on files and hunks, keyed by hunk position so it survives manifest regeneration for unchanged hunks. Ticking a chapter, folder or the Unassigned root completes every file beneath it in one step. Per-chapter counts plus an overall "N of M reviewed".
+- Issues carry the same checkbox: ticking one marks it resolved (written back to the manifest for the skill to read), so completing a finding works like completing a file.
 - Auto-refreshes when the skill regenerates the manifest.
 
 ## Known limitations
