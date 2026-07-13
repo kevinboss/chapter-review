@@ -106,12 +106,6 @@
         "title": "Open File",
         "category": "Chapter Review",
         "icon": "$(go-to-file)"
-      },
-      {
-        "command": "chapterReview.resolveIssue",
-        "title": "Toggle Issue Resolved",
-        "category": "Chapter Review",
-        "icon": "$(check)"
       }
     ],
     "menus": {
@@ -151,13 +145,6 @@
           "group": "navigation"
         }
       ],
-      "view/item/context": [
-        {
-          "command": "chapterReview.resolveIssue",
-          "when": "view == chapterReview && viewItem == chapterReviewIssue",
-          "group": "inline"
-        }
-      ],
       "commandPalette": [
         {
           "command": "chapterReview.openDiff",
@@ -173,10 +160,6 @@
         },
         {
           "command": "chapterReview.updateSkill",
-          "when": "false"
-        },
-        {
-          "command": "chapterReview.resolveIssue",
           "when": "false"
         }
       ]

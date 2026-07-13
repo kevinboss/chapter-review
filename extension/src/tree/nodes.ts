@@ -1,4 +1,4 @@
-import { Chapter, entryKeys, FileEntry, Hunk, Issue, reviewKey, UnassignedEntry } from "../model";
+import { Chapter, entryKeys, FileEntry, Hunk, Issue, UnassignedEntry } from "../model";
 
 export type ViewMode = "tree" | "list";
 
@@ -53,14 +53,11 @@ export interface ProgressReader {
   isReviewed(key: string): boolean;
 }
 
-/** Review keys a node stands for (used when its checkbox is toggled). */
-export function nodeKeys(node: Node): string[] {
-  switch (node.kind) {
-    case "file":
-      return entryKeys(node.entry);
-    case "hunk":
-      return [reviewKey(node.entry.path, node.hunk)];
-    default:
-      return [];
+/** Review keys for every file in a folder subtree (backs the folder checkbox). */
+export function folderFileKeys(folder: FolderNode): string[] {
+  const keys: string[] = [];
+  for (const child of folder.children) {
+    keys.push(...(child.kind === "file" ? entryKeys(child.entry) : folderFileKeys(child)));
   }
+  return keys;
 }
