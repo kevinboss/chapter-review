@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new release of the chapter-review extension and skill. Bumps the version, tags it, and pushes so the Release workflow builds and publishes the .vsix and skill bundle to GitHub Releases. Use when the user wants to ship a release or publish a new version.
+description: Cut a new release of the chapter-review extension and skill. Bumps the version, tags it, and pushes so the Release workflow builds and publishes the .vsix and skill bundle to GitHub Releases and the VS Code Marketplace. Use when the user wants to ship a release or publish a new version.
 ---
 
 # Release
@@ -22,12 +22,12 @@ Cut a version tag; GitHub Actions (`.github/workflows/release.yml`) does the bui
 
 5. **Tag and push.** Create an *annotated* tag: `git tag -a vX.Y.Z -m "vX.Y.Z"`. This matters: `git push --follow-tags` only pushes annotated tags, so a lightweight `git tag vX.Y.Z` never reaches origin and the workflow silently fails to trigger. Then `git push origin main --follow-tags`. Confirm the tag actually landed with `git ls-remote --tags origin vX.Y.Z` (must be non-empty); if it's empty, push it explicitly with `git push origin vX.Y.Z`. The tag must be exactly `v` + the `extension/package.json` version, or the workflow fails the release.
 
-6. **Watch the pipeline.** The tag push triggers the Release workflow. Report its URL (`gh run list --workflow=Release --limit 1`), optionally `gh run watch <id>`. It builds the `.vsix`, zips the skill, and attaches both to a GitHub Release with auto-generated notes.
+6. **Watch the pipeline.** The tag push triggers the Release workflow. Report its URL (`gh run list --workflow=Release --limit 1`), optionally `gh run watch <id>`. It builds the `.vsix`, zips the skill, attaches both to a GitHub Release with auto-generated notes, and publishes the `.vsix` to the VS Code Marketplace.
 
-7. **Verify.** Once the run succeeds, confirm with `gh release view vX.Y.Z` that the `.vsix` and `chapter-review-skill.zip` are attached. Report the release URL.
+7. **Verify.** Once the run succeeds, confirm with `gh release view vX.Y.Z` that the `.vsix` and `chapter-review-skill.zip` are attached, and that the Marketplace listing shows the new version (https://marketplace.visualstudio.com/items?itemName=kevinboss.chapter-review). Report the release URL.
 
 ## Notes
 
 - Release notes are auto-generated from commits/PRs since the last tag (`--generate-notes`). For curated notes, edit the release after it's created.
-- The repo is private; the release and its assets are visible only to those with repo access. Installing the extension = download the `.vsix`, then "Install from VSIX" in VSCode.
-- This never publishes to the VS Code Marketplace. Distribution is GitHub Releases only.
+- The repo is public. Users install from the VS Code Marketplace (search "Chapter Review"), or download the `.vsix` from the GitHub Release and "Install from VSIX" in VSCode.
+- Marketplace publishing uses the `VSCE_PAT` repo secret (an Azure DevOps PAT scoped to Marketplace > Manage). If it expires the publish step fails while the GitHub Release still succeeds; regenerate the token and refresh the secret with `gh secret set VSCE_PAT`.
