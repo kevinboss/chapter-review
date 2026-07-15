@@ -50,7 +50,8 @@ export type Node =
 
 /** What the tree needs from review progress (ReviewProgress satisfies it). */
 export interface ProgressReader {
-  isReviewed(key: string): boolean;
+  /** Reviewed iff the digest recorded for this unit matches its current content. */
+  isReviewedAt(key: string, currentDigest: string | undefined): boolean;
 }
 
 /** Review keys for every file in a folder subtree (backs the folder checkbox). */

@@ -1,6 +1,8 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { DigestMap } from "../fingerprint";
 import {
+  allEntries,
   Chapter,
   entryKeys,
   FileEntry,
@@ -11,6 +13,7 @@ import {
   reviewKey,
   UnassignedEntry,
 } from "../model";
+import { ReviewUnit } from "../progress";
 import { Staleness } from "../staleness";
 import { buildFolderTree } from "./folderTree";
 import { FileNode, folderFileKeys, HunkNode, IssueNode, Node, ProgressReader, ViewMode } from "./nodes";
@@ -28,6 +31,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
 
   /** Set by the host when the manifest's pinned commit diverges from the branch. */
   staleness: Staleness | undefined;
+
+  /** Current content digest per review key; set by the host on each manifest reload. */
+  digests: DigestMap = new Map();
 
   constructor(
     private readonly workspaceRoot: vscode.Uri,
@@ -63,13 +69,18 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     }
   }
 
+  /** Each review key a node covers, paired with its unit's current digest. */
+  reviewUnitsFor(node: Node): ReviewUnit[] {
+    return this.reviewKeysFor(node).map((key) => ({ key, digest: this.digests.get(key) }));
+  }
+
   /** Checkbox state for a node backed by review keys, or none if it has zero. */
   private checkbox(node: Node): vscode.TreeItemCheckboxState | undefined {
     const keys = this.reviewKeysFor(node);
     if (keys.length === 0) {
       return undefined;
     }
-    return keys.every((k) => this.progress.isReviewed(k))
+    return keys.every((k) => this.progress.isReviewedAt(k, this.digests.get(k)))
       ? vscode.TreeItemCheckboxState.Checked
       : vscode.TreeItemCheckboxState.Unchecked;
   }
@@ -337,13 +348,18 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     return item;
   }
 
+  /** Reviewed/total review units across the whole manifest (backs the view header). */
+  progressSummary(): { done: number; total: number } {
+    return this.manifest ? this.countUnits(allEntries(this.manifest)) : { done: 0, total: 0 };
+  }
+
   private countUnits(entries: (FileEntry | UnassignedEntry)[]): {
     done: number;
     total: number;
   } {
     const keys = entries.flatMap(entryKeys);
     return {
-      done: keys.filter((k) => this.progress.isReviewed(k)).length,
+      done: keys.filter((k) => this.progress.isReviewedAt(k, this.digests.get(k))).length,
       total: keys.length,
     };
   }

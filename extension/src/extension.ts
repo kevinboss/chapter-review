@@ -9,7 +9,8 @@ import {
   resolveGitDir,
   reviewUriPath,
 } from "./gitContent";
-import { allEntries, entryKeys, isOpen, parseManifest } from "./model";
+import { computeDigests } from "./fingerprint";
+import { isOpen, parseManifest } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
 import { checkStaleness } from "./staleness";
@@ -68,9 +69,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       view.message = undefined;
       return;
     }
-    const keys = allEntries(m).flatMap(entryKeys);
-    const done = keys.filter((k) => progress.isReviewed(k)).length;
-    view.description = `${done} of ${keys.length} reviewed`;
+    const { done, total } = provider.progressSummary();
+    view.description = `${done} of ${total} reviewed`;
     view.message = m.summary ? `${m.head}: ${m.summary}` : m.head;
   }
 
@@ -84,7 +84,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(`Chapter Review: ${(e as Error).message}`);
       }
     }
+    await refreshDigests();
     await refreshStaleness();
+  }
+
+  // Fingerprints the reviewed content of each unit so checkmarks track content,
+  // not hunk coordinates: a regenerated chapter drops the check on units whose
+  // content moved. Recomputed only here (on manifest change), since digests are
+  // a pure function of the manifest's pinned commits. reconcile() then binds any
+  // pre-digest checks to the content present now, so upgrading loses no progress.
+  async function refreshDigests(): Promise<void> {
+    provider.digests = provider.manifest
+      ? await computeDigests(folderUri.fsPath, provider.manifest)
+      : new Map();
+    await progress.reconcile(provider.digests);
   }
 
   // Re-checks whether the manifest's pinned commit still matches the branch and
@@ -187,7 +200,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (node.kind === "issue") {
           issueUpdates.push({ id: node.issue.id, resolved: checked });
         } else {
-          await progress.setReviewed(provider.reviewKeysFor(node), checked);
+          await progress.setReviewed(provider.reviewUnitsFor(node), checked);
         }
       }
       if (issueUpdates.length > 0) {
