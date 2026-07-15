@@ -49,3 +49,11 @@ jobs:
             --generate-notes \
             extension/*.vsix \
             chapter-review-skill.zip
+
+      - name: Publish to VS Code Marketplace
+        working-directory: extension
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          VSIX=$(ls *.vsix)
+          npx vsce publish --packagePath "$VSIX"
