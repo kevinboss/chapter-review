@@ -15,10 +15,13 @@
 //   chapter-review issue list               list findings
 //
 // The manifest destination (<git-dir>/chapter-review/chapters.json) is fixed
-// and owned by this command, so the skill never names it. `write` takes only
-// the partition (chapters + unassigned + meta); the command carries existing
+// and owned by this command, so the skill never names it. `write` takes the
+// partition (chapters + unassigned + meta) and re-pins the commit metadata
+// (headSha, mergeBase, generatedAt) to the commit it observes in the working
+// tree, so a regenerated manifest always matches live git and the extension's
+// "out of date" banner clears the moment it lands. The command carries existing
 // issues forward across regeneration and re-maps their chapterId, and the
-// `issue` subcommands mutate findings in place — so the agent never re-sends
+// `issue` subcommands mutate findings in place, so the agent never re-sends
 // the whole file to add or change one issue. Every mutation is validated
 // before it lands; an invalid change is refused, not written.
 //
@@ -61,6 +64,36 @@ function gitDir() {
 
 const manifestPath = () => path.join(gitDir(), "chapter-review", "chapters.json");
 const focusPath = () => path.join(gitDir(), "chapter-review", "focus.json");
+
+// Soft git query for the commit pin: trimmed stdout, or undefined when git
+// can't answer. Unlike gitDir() this never dies — write must still install a
+// manifest on a detached HEAD or a repo whose base ref has gone missing; it
+// just keeps the draft's value for whichever pin git couldn't recompute.
+function gitTry(...args) {
+  try {
+    // stderr silenced: a failed soft query is an expected fallback (missing base
+    // ref, detached HEAD), not something to print git's "fatal:" line about.
+    return execFileSync("git", args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Two hex refs name the same commit when one is a prefix of the other (>= 7
+// chars), matching the extension's staleness comparison so a short SHA the
+// draft carried is not reported as a correction against its own full form.
+function sameCommit(a, b) {
+  if (!a || !b) return false;
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  const n = Math.min(x.length, y.length);
+  return n >= 7 && x.slice(0, n) === y.slice(0, n);
+}
+
+const short = (sha) => (typeof sha === "string" ? sha.slice(0, 7) : sha);
 
 function readManifestOrDie() {
   const p = manifestPath();
@@ -264,6 +297,39 @@ function cmdShow() {
   process.stdout.write(readFileSync(p, "utf8"));
 }
 
+// Re-pin the manifest to the commit `write` observes. The extension decides
+// staleness by comparing manifest.headSha against `git rev-parse HEAD` and
+// manifest.mergeBase against `git merge-base <base> HEAD`, and it reconstructs
+// every chapter diff (and the review-progress digests) from those same two
+// refs. Deriving both here from live git (mergeBase from the draft's own base,
+// so both sides run the identical merge-base) means a regeneration lands pinned
+// to the current commit: the "out of date" banner clears and the diffs render
+// against the blobs the hunks describe. Live git wins over whatever the draft
+// carried; a query that can't run (detached HEAD, base ref gone, git absent)
+// falls back to the draft value so the pin is never dropped. generatedAt is
+// stamped to now. Returns notes for any pin git moved off the draft's value.
+function repinCommits(draft) {
+  if (!draft || typeof draft !== "object") return [];
+  const notes = [];
+  const liveHead = gitTry("rev-parse", "HEAD");
+  if (liveHead) {
+    if (draft.headSha && !sameCommit(draft.headSha, liveHead)) {
+      notes.push(`headSha ${short(draft.headSha)}->${short(liveHead)}`);
+    }
+    draft.headSha = liveHead;
+  }
+  const base = typeof draft.base === "string" ? draft.base : undefined;
+  const liveMergeBase = base ? gitTry("merge-base", base, "HEAD") : undefined;
+  if (liveMergeBase) {
+    if (draft.mergeBase && !sameCommit(draft.mergeBase, liveMergeBase)) {
+      notes.push(`mergeBase ${short(draft.mergeBase)}->${short(liveMergeBase)}`);
+    }
+    draft.mergeBase = liveMergeBase;
+  }
+  draft.generatedAt = new Date().toISOString();
+  return notes;
+}
+
 function cmdWrite(arg) {
   const src = arg ?? 0; // fd 0 = stdin
   let draft;
@@ -279,6 +345,10 @@ function cmdWrite(arg) {
     );
   }
 
+  // Pin to the working tree before validating/installing, so the manifest that
+  // lands matches what the extension will compare it against.
+  const repinned = repinCommits(draft);
+
   const prior = existsSync(manifestPath()) ? readManifestOrDie() : null;
   const priorIssues = prior && Array.isArray(prior.issues) ? prior.issues : [];
   const { kept, pruned } = carryIssues(priorIssues, draft);
@@ -289,6 +359,12 @@ function cmdWrite(arg) {
     if (pruned.length > 0) line += `, pruned ${pruned.length} (${pruned.join(", ")})`;
     console.log(`${line} — the extension will pick it up.`);
     console.log(`  wrote ${dest}`);
+    if (draft.headSha) {
+      console.log(`  pinned to HEAD ${short(draft.headSha)} (mergeBase ${short(draft.mergeBase)})`);
+    }
+    if (repinned.length > 0) {
+      console.log(`  re-pinned ${repinned.join(", ")} to match the working tree`);
+    }
   });
 }
 
