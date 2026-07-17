@@ -29,6 +29,14 @@ jobs:
             exit 1
           fi
 
+      - name: Changelog must have an entry for this version
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          if ! grep -qE "^## \[${VERSION//./\\.}\]" extension/CHANGELOG.md; then
+            echo "::error::extension/CHANGELOG.md has no '## [$VERSION]' section — update the changelog before tagging"
+            exit 1
+          fi
+
       - name: Build .vsix
         working-directory: extension
         run: |
