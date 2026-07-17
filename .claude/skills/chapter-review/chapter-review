@@ -6,6 +6,7 @@
 //
 //   chapter-review focus                    print what the reviewer is looking at
 //   chapter-review show                     print the current manifest
+//   chapter-review base-check [base]        check the review base is fresh (read-only)
 //   chapter-review write [file]             validate a partition draft, then install it
 //   chapter-review issue add    <flags>     record a review finding
 //   chapter-review issue set    <id> <flags>  revise a finding
@@ -94,6 +95,54 @@ function sameCommit(a, b) {
 }
 
 const short = (sha) => (typeof sha === "string" ? sha.slice(0, 7) : sha);
+
+// Non-throwing boolean git query: true when the command exits 0. Needed for
+// `merge-base --is-ancestor`, which signals via exit code with empty stdout
+// (so gitTry, which returns undefined on empty output, can't tell it apart).
+function gitOk(...args) {
+  try {
+    execFileSync("git", args, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Resolve the review base the same way the skill's step 1 does, so base-check
+// judges the ref the skill will actually diff against: origin's default branch,
+// else a local main, else master. Undefined when none resolve.
+function resolveBase() {
+  const head = gitTry("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD");
+  if (head) return head.replace(/^refs\/remotes\//, ""); // -> "origin/main"
+  if (gitOk("rev-parse", "--verify", "--quiet", "refs/heads/main")) return "main";
+  if (gitOk("rev-parse", "--verify", "--quiet", "refs/heads/master")) return "master";
+  return undefined;
+}
+
+// The branch name behind a base ref: strip refs/heads|remotes and a leading
+// origin/. "origin/main" -> "main", "refs/heads/release/x" -> "release/x".
+function branchLeaf(ref) {
+  return ref.replace(/^refs\/(heads|remotes)\//, "").replace(/^origin\//, "");
+}
+
+// Best-effort remote tip for `leaf` without fetching. Never prompts for
+// credentials (GIT_TERMINAL_PROMPT=0) and bails after a short timeout, so an
+// unreachable or slow remote degrades to {reachable:false} instead of hanging
+// the whole review generation on a network stall.
+function lsRemoteTip(leaf) {
+  try {
+    const out = execFileSync("git", ["ls-remote", "--heads", "origin", leaf], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 6000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    }).trim();
+    const tip = out ? out.split(/\s+/)[0] : undefined;
+    return { reachable: true, tip };
+  } catch {
+    return { reachable: false, tip: undefined };
+  }
+}
 
 function readManifestOrDie() {
   const p = manifestPath();
@@ -295,6 +344,101 @@ function cmdShow() {
     die("chapter-review: no manifest yet — nothing has been written for this branch.", 0);
   }
   process.stdout.write(readFileSync(p, "utf8"));
+}
+
+// base-check: is the review base fresh enough to diff against? Two ways it goes
+// stale: (1) a fresher copy of the same branch already sits in the repo (local
+// `main` behind `origin/main`, or the reverse) — safe to switch to with no
+// network; (2) `origin/<branch>` hasn't been fetched and the real remote moved
+// on, so merge-base(base, HEAD) lands behind commits already merged to the base
+// and the review fills with already-merged work. Reports both as an `action` the
+// skill acts on: "switch" (auto), "fetch" (ask first), "ok", or "unresolved".
+// Read-only: it never fetches or writes; the skill owns those decisions.
+function cmdBaseCheck(argBase) {
+  const base = argBase || resolveBase();
+  const result = { base };
+  const emit = () => {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+  };
+  if (!base) {
+    result.action = "unresolved";
+    result.message = "No base ref resolved (no origin/HEAD, main, or master).";
+    return emit();
+  }
+  const baseSha = gitTry("rev-parse", base);
+  if (!baseSha) {
+    result.action = "unresolved";
+    result.message = `Base ref "${base}" does not resolve.`;
+    return emit();
+  }
+  result.baseSha = baseSha;
+  const mergeBase = gitTry("merge-base", base, "HEAD");
+  result.mergeBase = mergeBase;
+
+  const leaf = branchLeaf(base);
+
+  // (1) Local check: a counterpart ref (the local branch and the origin tracking
+  // ref, minus whichever one `base` already is) whose fork point sits strictly
+  // ahead of the base's. Strictly ahead = base's merge-base is an ancestor of
+  // the candidate's; a candidate that's behind or diverged is not a fix.
+  const candidates = [`origin/${leaf}`, leaf].filter(
+    (c) => c !== base && gitOk("rev-parse", "--verify", "--quiet", c)
+  );
+  let fresher;
+  for (const c of candidates) {
+    const cmb = gitTry("merge-base", c, "HEAD");
+    if (!cmb || !mergeBase) continue;
+    if (!sameCommit(cmb, mergeBase) && gitOk("merge-base", "--is-ancestor", mergeBase, cmb)) {
+      const ahead = Number(gitTry("rev-list", "--count", `${mergeBase}..${cmb}`)) || 0;
+      if (!fresher || ahead > fresher.ahead) fresher = { base: c, mergeBase: cmb, ahead };
+    }
+  }
+
+  // (2) Network check: does the real remote disagree with our tracking ref? A
+  // differing tip means origin/<leaf> is unfetched; only a fetch moves the fork
+  // point forward. Best-effort — skipped when there's no origin or it's offline.
+  let unfetched = false;
+  let remoteReachable = null;
+  if (gitTry("remote", "get-url", "origin")) {
+    const { reachable, tip } = lsRemoteTip(leaf);
+    remoteReachable = reachable;
+    if (reachable && tip) {
+      result.remoteTip = tip;
+      const trackingSha = gitTry("rev-parse", `origin/${leaf}`);
+      if (!trackingSha || !sameCommit(tip, trackingSha)) unfetched = true;
+    }
+  }
+  result.remoteReachable = remoteReachable;
+
+  if (fresher) {
+    result.suggestedBase = fresher.base;
+    result.suggestedMergeBase = fresher.mergeBase;
+    result.ahead = fresher.ahead;
+  }
+  result.unfetched = unfetched;
+
+  // A fetch also refreshes the tracking ref a local switch would target, so when
+  // both fire prefer the fetch. `stale` is anything that isn't a clean "ok".
+  if (unfetched) {
+    result.action = "fetch";
+    result.message =
+      `origin/${leaf} differs from the remote tip (not fetched), so ` +
+      `merge-base(${base}, HEAD) may sit behind commits already merged to ${leaf}. ` +
+      "Fetch and regenerate against the fresh fork point, or proceed against the stale base.";
+  } else if (fresher) {
+    result.action = "switch";
+    result.message =
+      `${fresher.base} forks ${fresher.ahead} commit(s) ahead of ${base}; ` +
+      "use it as the base to avoid reviewing already-merged work.";
+  } else {
+    result.action = "ok";
+    result.message =
+      remoteReachable === false
+        ? `Base ${base} looks current locally; the remote check was skipped (unreachable).`
+        : `Base ${base} is current.`;
+  }
+  result.stale = result.action !== "ok";
+  emit();
 }
 
 // Re-pin the manifest to the commit `write` observes. The extension decides
@@ -500,6 +644,7 @@ function usage(code) {
       "",
       "  focus                     print what the reviewer is looking at",
       "  show                      print the current manifest",
+      "  base-check [base]         report whether the review base is fresh (read-only)",
       "  write [file]              validate a partition draft, then install it (stdin if no file)",
       "  issue add    <flags>      record a finding (--path --severity --note [--chapter --hunk --old-path])",
       "  issue set    <id> <flags> revise a finding",
@@ -519,6 +664,9 @@ switch (cmd) {
     break;
   case "show":
     cmdShow();
+    break;
+  case "base-check":
+    cmdBaseCheck(rest[0]);
     break;
   case "write":
     cmdWrite(rest[0]);
