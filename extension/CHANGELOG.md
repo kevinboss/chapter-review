@@ -4,6 +4,13 @@ All notable changes to the Chapter Review extension are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-07-16
+
+### Fixed
+- The "Review may be out of date" banner now clears when the manifest is
+  regenerated in place, instead of lingering after the chapters were rebuilt
+  against the current commit.
+
 ## [0.7.1] - 2026-07-15
 
 ### Fixed
@@ -77,6 +84,7 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Skill installer: the extension bundles the chapter-review skill and installs
   it into your coding agent, consent-gated.
 
+[0.7.2]: https://github.com/kevinboss/chapter-review/releases/tag/v0.7.2
 [0.7.1]: https://github.com/kevinboss/chapter-review/releases/tag/v0.7.1
 [0.7.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.7.0
 [0.6.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.6.0
