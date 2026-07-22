@@ -9,8 +9,10 @@
 </p>
 
 <p align="center">
-  <a href="https://marketplace.visualstudio.com/items?itemName=kevinboss.chapter-review"><img src="https://vsmarketplacebadges.dev/version-short/kevinboss.chapter-review.svg" alt="VS Code Marketplace version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
+  <a href="https://marketplace.visualstudio.com/items?itemName=kevinboss.chapter-review"><img src="https://img.shields.io/visual-studio-marketplace/v/kevinboss.chapter-review?label=marketplace" alt="marketplace"></a>
+  <a href="https://github.com/kevinboss/chapter-review/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/kevinboss/chapter-review/ci.yml?label=CI" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/kevinboss/chapter-review" alt="License"></a>
   <a href="https://github.com/kevinboss/heartbeat"><img src="https://raw.githubusercontent.com/kevinboss/heartbeat/main/badges/kevinboss_chapter-review.svg" alt="Heartbeat"></a>
 </p>
 
