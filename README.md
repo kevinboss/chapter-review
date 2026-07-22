@@ -13,6 +13,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
+> This project is being developed using AI development tools. However, every line of code is reviewed and approved by a human before being committed.
+
 A large branch lands as a single flat diff: dozens of files and hundreds of hunks in no particular order.
 chapter-review groups those hunks into chapters (a new feature here, a rename there) so you can read the branch as a narrative and track how much of it you have covered.
 A Claude Code skill partitions the diff and writes a manifest; a VSCode extension renders that manifest as a reviewable tree with chapter-scoped diffs and per-hunk progress.
