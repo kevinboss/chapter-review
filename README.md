@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kevinboss.chapter-review"><img src="https://vsmarketplacebadges.dev/version-short/kevinboss.chapter-review.svg" alt="VS Code Marketplace version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/kevinboss/heartbeat"><img src="https://raw.githubusercontent.com/kevinboss/heartbeat/main/badges/kevinboss_chapter-review.svg" alt="Heartbeat"></a>
 </p>
 
 > This project is being developed using AI development tools. However, every line of code is reviewed and approved by a human before being committed.
