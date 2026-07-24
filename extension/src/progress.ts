@@ -1,11 +1,4 @@
-import * as vscode from "vscode";
-
-const PROGRESS_KEY = "chapterReview.reviewed";
-
-// A check recorded before content digests existed, or one whose unit has no
-// reconstructable content. Counts as reviewed until reconcile() binds it to
-// whatever content is present now.
-const LEGACY = "legacy";
+import { allEntries, Hunk, Manifest, ReviewedUnit, reviewKey } from "./model";
 
 /** A review unit paired with the digest of the content it stands for. */
 export interface ReviewUnit {
@@ -14,83 +7,58 @@ export interface ReviewUnit {
 }
 
 /**
- * Tracks which review units (file/hunk keys from model.reviewKey) the user has
- * checked off, together with a digest of the content each was checked against.
- * A unit reads as reviewed only while its recorded digest matches the current
- * one, so regenerating the chapters after the author pushed a fix drops the
- * checkmark on exactly the units whose content moved. Backed by the extension's
- * workspace Memento, so progress is per-repo and survives reloads.
+ * The review units the reviewer has checked off, each with the content digest it
+ * was checked against. Backed by the manifest's `reviewed` array, not the
+ * extension's own storage, so the CLI can carry it across regeneration and clear
+ * it; the host loads it on read and persists it on tick.
  */
 export class ReviewProgress {
-  private reviewed: Map<string, string>;
+  private reviewed = new Map<string, string>();
 
-  constructor(private readonly state: vscode.Memento) {
-    this.reviewed = load(state.get(PROGRESS_KEY));
+  /** Reset the checked set from a manifest's `reviewed` array. */
+  load(units: ReviewedUnit[] | undefined): void {
+    this.reviewed = new Map((units ?? []).map((u) => [reviewKey(u.path, u.hunk), u.digest]));
   }
 
-  /**
-   * Reviewed iff the digest recorded when the box was ticked still matches the
-   * unit's current content. A LEGACY record counts until reconcile() rebinds it.
-   */
+  /** Reviewed iff the digest recorded at tick time still matches current content. */
   isReviewedAt(key: string, currentDigest: string | undefined): boolean {
     const rec = this.reviewed.get(key);
-    if (rec === undefined) {
-      return false;
-    }
-    if (rec === LEGACY) {
-      return true;
-    }
-    return currentDigest !== undefined && rec === currentDigest;
+    return rec !== undefined && currentDigest !== undefined && rec === currentDigest;
   }
 
-  setReviewed(units: ReviewUnit[], reviewed: boolean): Thenable<void> {
+  /** Tick or untick units in memory. The host then persists the result. */
+  setReviewed(units: ReviewUnit[], reviewed: boolean): void {
     for (const { key, digest } of units) {
-      if (reviewed) {
-        this.reviewed.set(key, digest ?? LEGACY);
+      if (reviewed && digest !== undefined) {
+        this.reviewed.set(key, digest);
       } else {
         this.reviewed.delete(key);
       }
     }
-    return this.persist();
+  }
+
+  clear(): void {
+    this.reviewed.clear();
   }
 
   /**
-   * One-time upgrade after the digest feature ships: bind every legacy check to
-   * the content present now, so existing progress survives and starts tracking
-   * edits from here on. No write once nothing legacy remains.
+   * Serialize back to a `reviewed` array, rebuilding each unit from the
+   * manifest's own entries rather than by parsing a review key apart.
    */
-  reconcile(current: Map<string, string>): Thenable<void> | undefined {
-    let changed = false;
-    for (const [key, rec] of this.reviewed) {
-      if (rec === LEGACY) {
-        const now = current.get(key);
-        if (now !== undefined) {
-          this.reviewed.set(key, now);
-          changed = true;
+  toReviewedUnits(manifest: Manifest): ReviewedUnit[] {
+    const out: ReviewedUnit[] = [];
+    for (const entry of allEntries(manifest)) {
+      const units: { path: string; hunk?: Hunk }[] = entry.hunks
+        ? entry.hunks.map((hunk) => ({ path: entry.path, hunk }))
+        : [{ path: entry.path }];
+      for (const u of units) {
+        const digest = this.reviewed.get(reviewKey(u.path, u.hunk));
+        if (digest === undefined) {
+          continue;
         }
+        out.push(u.hunk ? { path: u.path, hunk: u.hunk, digest } : { path: u.path, digest });
       }
     }
-    return changed ? this.persist() : undefined;
+    return out;
   }
-
-  clear(): Thenable<void> {
-    this.reviewed.clear();
-    return this.persist();
-  }
-
-  private persist(): Thenable<void> {
-    return this.state.update(PROGRESS_KEY, Object.fromEntries(this.reviewed));
-  }
-}
-
-// Accepts both stored shapes: the legacy string[] of keys (each rebound as
-// LEGACY) and the current { key: digest } object.
-function load(raw: unknown): Map<string, string> {
-  if (Array.isArray(raw)) {
-    return new Map(raw.map((k) => [String(k), LEGACY]));
-  }
-  if (raw && typeof raw === "object") {
-    return new Map(Object.entries(raw as Record<string, string>));
-  }
-  return new Map();
 }

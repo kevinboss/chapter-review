@@ -35,6 +35,8 @@ export interface Chapter {
 
 export type IssueSeverity = "critical" | "high" | "low";
 export type IssueStatus = "open" | "resolved";
+/** Whether the finding's premise has been checked. Omitted defaults to "suspected". */
+export type IssueConfidence = "suspected" | "verified";
 
 /** A review finding the skill recorded. Grouped by chapterId, anchored to path(+hunk). */
 export interface Issue {
@@ -45,8 +47,20 @@ export interface Issue {
   chapterId?: string;
   severity: IssueSeverity;
   note: string;
+  confidence?: IssueConfidence;
   status?: IssueStatus;
   createdAt?: string;
+}
+
+/**
+ * A checked-off review unit, with the content digest it was checked against.
+ * Progress lives in the manifest so the CLI can carry it across regeneration
+ * and clear it (`uncheck`); the extension writes it as the reviewer ticks boxes.
+ */
+export interface ReviewedUnit {
+  path: string;
+  hunk?: Hunk;
+  digest: string;
 }
 
 export interface Manifest {
@@ -60,6 +74,7 @@ export interface Manifest {
   chapters: Chapter[];
   unassigned: UnassignedEntry[];
   issues?: Issue[];
+  reviewed?: ReviewedUnit[];
 }
 
 export function isOpen(issue: Issue): boolean {
