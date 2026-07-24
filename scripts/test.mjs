@@ -84,6 +84,16 @@ const cases = [
     expectError: "note",
   },
   {
+    name: "issue with unknown confidence",
+    mutate: (m) => (m.issues[0].confidence = "maybe"),
+    expectError: "confidence",
+  },
+  {
+    name: "issue confidence omitted is valid",
+    mutate: (m) => delete m.issues[0].confidence,
+    expectError: null,
+  },
+  {
     name: "duplicate issue id",
     mutate: (m) => m.issues.push({ ...m.issues[0] }),
     expectError: "duplicate issue id",
@@ -92,6 +102,39 @@ const cases = [
     name: "issue with unknown field",
     mutate: (m) => (m.issues[0].author = "me"),
     expectError: "unknown property",
+  },
+  {
+    name: "reviewed unit is valid",
+    mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "abcd1234" }]),
+    expectError: null,
+  },
+  {
+    name: "reviewed unit with a hunk is valid",
+    mutate: (m) =>
+      (m.reviewed = [
+        { path: "src/server.ts", hunk: { oldStart: 30, oldLines: 0, newStart: 30, newLines: 24 }, digest: "0a1b" },
+      ]),
+    expectError: null,
+  },
+  {
+    name: "reviewed unit with a non-hex digest",
+    mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "NOPE" }]),
+    expectError: "digest",
+  },
+  {
+    name: "reviewed unit missing digest",
+    mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts" }]),
+    expectError: "digest",
+  },
+  {
+    name: "reviewed unit with unknown field",
+    mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "ab", extra: 1 }]),
+    expectError: "unknown property",
+  },
+  {
+    name: "reviewed must be an array",
+    mutate: (m) => (m.reviewed = {}),
+    expectError: "reviewed",
   },
 ];
 

@@ -53,9 +53,34 @@
       "type": "array",
       "description": "Per-chapter review findings the chapter-review skill noticed and wants to surface; the extension displays them. Authored by the skill while it reviews the diff (and added to on request during follow-up); durable: the skill MUST carry this array across regeneration (re-mapping each issue's chapterId to the chapter that owns its path/hunk in the new partition), never dropping findings. Optional; absent means none yet.",
       "items": { "$ref": "#/definitions/issue" }
+    },
+    "reviewed": {
+      "type": "array",
+      "description": "Review checkmarks: the units the reviewer has ticked off, each with the content digest it was checked against. The chapter-review VSCode extension writes and updates this as boxes are ticked; `chapter-review write` carries it across regeneration and `chapter-review uncheck` clears units from it. The skill never authors it. A unit reads as reviewed only while its stored digest still matches the current content, so a checkmark drops when its content moves and survives when it doesn't. Optional; absent means nothing is checked yet.",
+      "items": { "$ref": "#/definitions/reviewedUnit" }
     }
   },
   "definitions": {
+    "reviewedUnit": {
+      "type": "object",
+      "required": ["path", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/path",
+          "description": "File the checkmark is on. With hunk, identifies one hunk unit; without, the file's whole-file unit."
+        },
+        "hunk": {
+          "$ref": "#/definitions/hunk",
+          "description": "Present for a hunk-level checkmark; absent means the whole-file unit."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]+$",
+          "description": "Content fingerprint the unit was checked against, computed by the extension. The checkmark holds only while this matches the current content."
+        }
+      }
+    },
     "issue": {
       "type": "object",
       "required": ["id", "path", "severity", "note"],
@@ -85,6 +110,10 @@
           "type": "string",
           "minLength": 1,
           "description": "The finding."
+        },
+        "confidence": {
+          "enum": ["suspected", "verified"],
+          "description": "Whether the finding's premise has been checked. Omitted defaults to \"suspected\": noted on a read-through, premise not yet confirmed. \"verified\" means the premise was checked against the code. Lets a first-pass finding say \"verify before relying on this\", so a shaky note isn't read as settled."
         },
         "status": {
           "enum": ["open", "resolved"],
@@ -138,7 +167,7 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/definitions/hunk" },
-          "description": "Omitted = the file's entire diff belongs to this entry (typical for added/deleted files). Present = only these hunks belong here; the file may then appear in other chapters with disjoint hunks."
+          "description": "Omitted = the whole file's diff belongs to this entry, so ranges aren't enumerated. Fine for any file whose changes all sit in one chapter, not only added/deleted files: a modified file with several hunks that all belong here should omit hunks too. Present = only these hunks belong here; the file may then appear in other chapters with disjoint hunks."
         },
         "note": {
           "type": "string",

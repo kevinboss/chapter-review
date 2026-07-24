@@ -1,6 +1,6 @@
 // Validates a chapters.json manifest: structure first, then the partition
 // rules structure can't express. Zero dependencies (Node builtins only) so the
-// skill directory is self-contained and portable into any repo — copy it in,
+// skill directory is self-contained and portable into any repo; copy it in,
 // no npm install. This validator is authoritative; chapters.schema.json is the
 // same contract expressed as JSON Schema for editors and documentation. Keep
 // the two in sync when the contract changes.
@@ -13,7 +13,9 @@ import { fileURLToPath } from "node:url";
 const STATUS = new Set(["added", "modified", "deleted", "renamed"]);
 const SEVERITY = new Set(["critical", "high", "low"]);
 const ISSUE_STATUS = new Set(["open", "resolved"]);
+const CONFIDENCE = new Set(["suspected", "verified"]);
 const SHA = /^[0-9a-f]{7,40}$/;
+const DIGEST = /^[0-9a-f]+$/;
 const CHAPTER_ID = /^ch-[0-9]+$/;
 const ISSUE_ID = /^iss-[0-9]+$/;
 const PATH = /^[^/]/; // repo-relative, no leading slash
@@ -127,15 +129,31 @@ function checkIssue(issue, label, push) {
   if (typeof issue.note !== "string" || issue.note.length < 1) {
     push(`${label}.note must be a non-empty string`);
   }
+  if (issue.confidence !== undefined && !CONFIDENCE.has(issue.confidence)) {
+    push(`${label}.confidence must be one of ${[...CONFIDENCE].join(", ")}`);
+  }
   if (issue.status !== undefined && !ISSUE_STATUS.has(issue.status)) {
     push(`${label}.status must be one of ${[...ISSUE_STATUS].join(", ")}`);
   }
   noExtraKeys(
     issue,
-    ["id", "path", "oldPath", "hunk", "chapterId", "severity", "note", "status", "createdAt"],
+    ["id", "path", "oldPath", "hunk", "chapterId", "severity", "note", "confidence", "status", "createdAt"],
     label,
     push
   );
+}
+
+function checkReviewedUnit(u, label, push) {
+  if (!isObject(u)) {
+    push(`${label} must be an object`);
+    return;
+  }
+  checkPath(u.path, `${label}.path`, push);
+  if (u.hunk !== undefined) checkHunk(u.hunk, `${label}.hunk`, push);
+  if (typeof u.digest !== "string" || !DIGEST.test(u.digest)) {
+    push(`${label}.digest must be a hex string`);
+  }
+  noExtraKeys(u, ["path", "hunk", "digest"], label, push);
 }
 
 function structuralErrors(m) {
@@ -167,9 +185,10 @@ function structuralErrors(m) {
   if (!Array.isArray(m.chapters)) push("chapters must be an array");
   if (!Array.isArray(m.unassigned)) push("unassigned must be an array");
   if (m.issues !== undefined && !Array.isArray(m.issues)) push("issues, when present, must be an array");
+  if (m.reviewed !== undefined && !Array.isArray(m.reviewed)) push("reviewed, when present, must be an array");
   noExtraKeys(
     m,
-    ["version", "base", "head", "mergeBase", "headSha", "generatedAt", "summary", "chapters", "unassigned", "issues"],
+    ["version", "base", "head", "mergeBase", "headSha", "generatedAt", "summary", "chapters", "unassigned", "issues", "reviewed"],
     "manifest",
     push
   );
@@ -191,6 +210,9 @@ function structuralErrors(m) {
         ids.add(issue.id);
       }
     });
+  }
+  if (Array.isArray(m.reviewed)) {
+    m.reviewed.forEach((u, i) => checkReviewedUnit(u, `reviewed[${i}]`, push));
   }
   return errors;
 }
@@ -305,7 +327,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (result.ok) {
     const s = result.stats;
     console.log(
-      `OK: ${target} — ${s.chapters} chapters, ${s.files} files, ${s.hunks} claims (a whole-file claim counts once, regardless of its hunk count)`
+      `OK ${target}: ${s.chapters} chapters, ${s.files} files, ${s.hunks} claims (a whole-file claim counts once, regardless of its hunk count)`
     );
   } else {
     console.error(`INVALID: ${target}`);

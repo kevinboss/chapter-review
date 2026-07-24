@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// chapter-review — the agent-facing command for talking to the chapter-review
+// chapter-review: the agent-facing command for talking to the chapter-review
 // VSCode extension. It owns the two-file protocol inside the git dir
 // (chapters.json, focus.json) so the skill interacts through intent-level
 // commands instead of reading and writing those paths by hand.
@@ -8,10 +8,13 @@
 //   chapter-review show                     print the current manifest
 //   chapter-review base-check [base]        check the review base is fresh (read-only)
 //   chapter-review write [file]             validate a partition draft, then install it
+//   chapter-review uncheck      <flags>     clear a review checkmark (re-read)
 //   chapter-review issue add    <flags>     record a review finding
 //   chapter-review issue set    <id> <flags>  revise a finding
 //   chapter-review issue resolve <id>       mark a finding resolved
 //   chapter-review issue reopen  <id>       reopen a finding
+//   chapter-review issue verify  <id>       mark a finding's premise verified
+//   chapter-review issue unverify <id>      mark a finding suspected (unchecked)
 //   chapter-review issue rm      <id>       drop a finding
 //   chapter-review issue list               list findings
 //
@@ -21,9 +24,11 @@
 // (headSha, mergeBase, generatedAt) to the commit it observes in the working
 // tree, so a regenerated manifest always matches live git and the extension's
 // "out of date" banner clears the moment it lands. The command carries existing
-// issues forward across regeneration and re-maps their chapterId, and the
-// `issue` subcommands mutate findings in place, so the agent never re-sends
-// the whole file to add or change one issue. Every mutation is validated
+// issues forward across regeneration and re-maps their chapterId, and it carries
+// the reviewer's checkmarks (the manifest's `reviewed` units) forward too, so a
+// regeneration never wipes review progress. The `issue` subcommands mutate
+// findings in place and `uncheck` clears a checkmark, so the agent never
+// re-sends the whole file to change one thing. Every mutation is validated
 // before it lands; an invalid change is refused, not written.
 //
 // Zero dependencies beyond Node + git, so the skill directory stays portable:
@@ -44,6 +49,7 @@ import { validateManifest } from "./validate.mjs";
 
 const SEVERITY = new Set(["critical", "high", "low"]);
 const ISSUE_STATUS = new Set(["open", "resolved"]);
+const CONFIDENCE = new Set(["suspected", "verified"]);
 const CHAPTER_ID = /^ch-[0-9]+$/;
 
 function die(msg, code = 1) {
@@ -51,7 +57,7 @@ function die(msg, code = 1) {
   process.exit(code);
 }
 
-// Worktree-safe absolute git dir — matches how the extension resolves it, so
+// Worktree-safe absolute git dir, matching how the extension resolves it, so
 // both sides land on the same chapter-review/ folder.
 function gitDir() {
   try {
@@ -67,7 +73,7 @@ const manifestPath = () => path.join(gitDir(), "chapter-review", "chapters.json"
 const focusPath = () => path.join(gitDir(), "chapter-review", "focus.json");
 
 // Soft git query for the commit pin: trimmed stdout, or undefined when git
-// can't answer. Unlike gitDir() this never dies — write must still install a
+// can't answer. Unlike gitDir() this never dies; write must still install a
 // manifest on a detached HEAD or a repo whose base ref has gone missing; it
 // just keeps the draft's value for whichever pin git couldn't recompute.
 function gitTry(...args) {
@@ -148,7 +154,7 @@ function readManifestOrDie() {
   const p = manifestPath();
   if (!existsSync(p)) {
     die(
-      "chapter-review: no manifest yet — run `chapter-review write` first."
+      "chapter-review: no manifest yet; run `chapter-review write` first."
     );
   }
   try {
@@ -163,7 +169,7 @@ function readManifestOrDie() {
 function installManifest(manifest, onOk) {
   const result = validateManifest(manifest);
   if (!result.ok) {
-    console.error("chapter-review: change refused — the manifest would be invalid:");
+    console.error("chapter-review: change refused, the manifest would be invalid:");
     for (const e of result.errors) console.error(`  - ${e}`);
     process.exit(1);
   }
@@ -185,6 +191,16 @@ function hunksOverlap(a, b) {
   return (
     spansOverlap(a.newStart, a.newLines, b.newStart, b.newLines) ||
     spansOverlap(a.oldStart, a.oldLines, b.oldStart, b.oldLines)
+  );
+}
+function hunkEquals(a, b) {
+  return (
+    !!a &&
+    !!b &&
+    a.oldStart === b.oldStart &&
+    a.oldLines === b.oldLines &&
+    a.newStart === b.newStart &&
+    a.newLines === b.newLines
   );
 }
 
@@ -251,6 +267,14 @@ function nextIssueId(issues) {
   return `iss-${max + 1}`;
 }
 
+// Carry review checkmarks forward across regeneration (they live in the
+// manifest, so a rebuild would drop them); keep units whose path still appears.
+function carryReviewed(oldReviewed, newManifest) {
+  return oldReviewed.filter(
+    (u) => u && typeof u.path === "string" && pathInManifest(newManifest, u.path)
+  );
+}
+
 // Assemble a manifest for output with a stable key order and issues last.
 function withIssues(manifest, issues) {
   const out = {
@@ -265,6 +289,10 @@ function withIssues(manifest, issues) {
     unassigned: manifest.unassigned,
   };
   if (issues.length > 0) out.issues = issues;
+  // Preserve review checkmarks through every write.
+  if (Array.isArray(manifest.reviewed) && manifest.reviewed.length > 0) {
+    out.reviewed = manifest.reviewed;
+  }
   return out;
 }
 
@@ -315,6 +343,12 @@ function issueFieldsFromFlags(flags) {
     }
     fields.chapterId = flags.chapterId;
   }
+  if (flags.confidence !== undefined) {
+    if (!CONFIDENCE.has(flags.confidence)) {
+      die(`chapter-review: --confidence must be one of ${[...CONFIDENCE].join(", ")}`);
+    }
+    fields.confidence = flags.confidence;
+  }
   if (flags.status !== undefined) {
     if (!ISSUE_STATUS.has(flags.status)) {
       die(`chapter-review: --status must be one of ${[...ISSUE_STATUS].join(", ")}`);
@@ -331,7 +365,7 @@ function cmdFocus() {
   const p = focusPath();
   if (!existsSync(p)) {
     console.log(
-      "No focus yet — the reviewer hasn't selected anything in the extension."
+      "No focus yet; the reviewer hasn't selected anything in the extension."
     );
     return;
   }
@@ -341,14 +375,14 @@ function cmdFocus() {
 function cmdShow() {
   const p = manifestPath();
   if (!existsSync(p)) {
-    die("chapter-review: no manifest yet — nothing has been written for this branch.", 0);
+    die("chapter-review: no manifest yet; nothing has been written for this branch.", 0);
   }
   process.stdout.write(readFileSync(p, "utf8"));
 }
 
 // base-check: is the review base fresh enough to diff against? Two ways it goes
 // stale: (1) a fresher copy of the same branch already sits in the repo (local
-// `main` behind `origin/main`, or the reverse) — safe to switch to with no
+// `main` behind `origin/main`, or the reverse), safe to switch to with no
 // network; (2) `origin/<branch>` hasn't been fetched and the real remote moved
 // on, so merge-base(base, HEAD) lands behind commits already merged to the base
 // and the review fills with already-merged work. Reports both as an `action` the
@@ -396,7 +430,7 @@ function cmdBaseCheck(argBase) {
 
   // (2) Network check: does the real remote disagree with our tracking ref? A
   // differing tip means origin/<leaf> is unfetched; only a fetch moves the fork
-  // point forward. Best-effort — skipped when there's no origin or it's offline.
+  // point forward. Best-effort, skipped when there's no origin or it's offline.
   let unfetched = false;
   let remoteReachable = null;
   if (gitTry("remote", "get-url", "origin")) {
@@ -485,7 +519,13 @@ function cmdWrite(arg) {
   if (Array.isArray(draft.issues) && draft.issues.length > 0) {
     die(
       "chapter-review: `write` takes the partition only. Record findings with " +
-        "`chapter-review issue add` — existing issues are preserved automatically."
+        "`chapter-review issue add`; existing issues are preserved."
+    );
+  }
+  if (Array.isArray(draft.reviewed) && draft.reviewed.length > 0) {
+    die(
+      "chapter-review: `write` takes the partition only. Review checkmarks are " +
+        "carried forward; don't put a `reviewed` array in the draft."
     );
   }
 
@@ -497,11 +537,27 @@ function cmdWrite(arg) {
   const priorIssues = prior && Array.isArray(prior.issues) ? prior.issues : [];
   const { kept, pruned } = carryIssues(priorIssues, draft);
 
+  // Carry the checkmarks forward too, pruning units whose path left the diff.
+  const priorReviewed = prior && Array.isArray(prior.reviewed) ? prior.reviewed : [];
+  const carriedReviewed = carryReviewed(priorReviewed, draft);
+  draft.reviewed = carriedReviewed;
+
+  // Report how many chapter ids carried over, so an accidental full rebuild
+  // (which churns ids and checkmarks) is visible rather than silent.
+  const priorChapterIds = new Set(
+    (prior && Array.isArray(prior.chapters) ? prior.chapters : []).map((c) => c && c.id)
+  );
+
   installManifest(withIssues(draft, kept), (stats, dest) => {
     let line = `Wrote ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
+    if (priorChapterIds.size > 0) {
+      const keptCh = draft.chapters.filter((c) => priorChapterIds.has(c.id)).length;
+      line += `, ${keptCh}/${draft.chapters.length} chapters kept from last run`;
+    }
     if (kept.length > 0) line += `, ${kept.length} issues preserved`;
     if (pruned.length > 0) line += `, pruned ${pruned.length} (${pruned.join(", ")})`;
-    console.log(`${line} — the extension will pick it up.`);
+    if (carriedReviewed.length > 0) line += `, ${carriedReviewed.length} checkmarks kept`;
+    console.log(`${line}.`);
     console.log(`  wrote ${dest}`);
     if (draft.headSha) {
       console.log(`  pinned to HEAD ${short(draft.headSha)} (mergeBase ${short(draft.mergeBase)})`);
@@ -534,6 +590,7 @@ function cmdIssue(sub, rest) {
         "oldPath",
         "note",
         "severity",
+        "confidence",
         "chapterId",
         "status",
         "hunk",
@@ -577,8 +634,9 @@ function cmdIssue(sub, rest) {
         }
       }
       const issue = { id, ...fields };
+      const confidence = issue.confidence === "verified" ? "verified" : "suspected";
       saveIssues(manifest, [...issues, issue], () =>
-        console.log(`Added ${id} (${issue.severity}) on ${issue.path}${issue.chapterId ? ` in ${issue.chapterId}` : ""}.`)
+        console.log(`Added ${id} (${issue.severity}, ${confidence}) on ${issue.path}${issue.chapterId ? ` in ${issue.chapterId}` : ""}.`)
       );
       break;
     }
@@ -591,6 +649,7 @@ function cmdIssue(sub, rest) {
         "oldPath",
         "note",
         "severity",
+        "confidence",
         "chapterId",
         "status",
         "hunk",
@@ -610,6 +669,17 @@ function cmdIssue(sub, rest) {
       );
       break;
     }
+    case "verify":
+    case "unverify": {
+      const [id] = rest;
+      if (!id) die(`chapter-review: issue ${sub} needs an issue id.`);
+      const { issue } = findIssue(manifest, id);
+      issue.confidence = sub === "verify" ? "verified" : "suspected";
+      saveIssues(manifest, issues, () =>
+        console.log(`Marked ${id} ${issue.confidence}.`)
+      );
+      break;
+    }
     case "rm": {
       const [id] = rest;
       if (!id) die("chapter-review: issue rm needs an issue id.");
@@ -626,15 +696,59 @@ function cmdIssue(sub, rest) {
       }
       for (const i of issues) {
         const status = i.status === "resolved" ? "resolved" : "open";
+        const confidence = i.confidence === "verified" ? "verified" : "suspected";
         console.log(
-          `${i.id}  [${i.severity}/${status}]  ${i.path}${i.chapterId ? ` (${i.chapterId})` : ""}\n    ${i.note}`
+          `${i.id}  [${i.severity}/${confidence}/${status}]  ${i.path}${i.chapterId ? ` (${i.chapterId})` : ""}\n    ${i.note}`
         );
       }
       break;
     }
     default:
-      die(`chapter-review: unknown issue command "${sub || ""}" (add|set|resolve|reopen|rm|list)`);
+      die(`chapter-review: unknown issue command "${sub || ""}" (add|set|resolve|reopen|verify|unverify|rm|list)`);
   }
+}
+
+// Clear the reviewer's checkmark on a file (or one hunk) by removing the matching
+// unit from the manifest's `reviewed` array. Direct mutation, like `issue resolve`.
+function cmdUncheck(rest) {
+  const flags = parseFlags(rest, ["path", "hunk"]);
+  if (flags.path === undefined) die("chapter-review: uncheck needs --path");
+  const hunk = flags.hunk !== undefined ? parseHunk(flags.hunk) : undefined;
+
+  const manifest = readManifestOrDie();
+  if (!pathInManifest(manifest, flags.path)) {
+    console.error(
+      `chapter-review: ${flags.path} isn't in the current manifest; check the path.`
+    );
+  }
+
+  const reviewed = Array.isArray(manifest.reviewed) ? manifest.reviewed : [];
+  // Keep all but the target: one hunk with --hunk, else every unit of the file.
+  const keep = reviewed.filter((u) => {
+    if (u.path !== flags.path) return true;
+    return hunk ? !hunkEquals(u.hunk, hunk) : false;
+  });
+  const removed = reviewed.length - keep.length;
+  if (removed === 0) {
+    console.log(
+      `Nothing to uncheck for ${flags.path} (not marked reviewed).`
+    );
+    return;
+  }
+
+  const scope = hunk
+    ? `${flags.path} @@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`
+    : flags.path;
+  installManifest(
+    withIssues(
+      { ...manifest, reviewed: keep },
+      Array.isArray(manifest.issues) ? manifest.issues : []
+    ),
+    () =>
+      console.log(
+        `Unchecked ${scope} (${removed} unit${removed > 1 ? "s" : ""}).`
+      )
+  );
 }
 
 function usage(code) {
@@ -646,10 +760,13 @@ function usage(code) {
       "  show                      print the current manifest",
       "  base-check [base]         report whether the review base is fresh (read-only)",
       "  write [file]              validate a partition draft, then install it (stdin if no file)",
-      "  issue add    <flags>      record a finding (--path --severity --note [--chapter --hunk --old-path])",
+      "  uncheck <flags>           clear a review checkmark (--path [--hunk]) so it re-reads",
+      "  issue add    <flags>      record a finding (--path --severity --note [--confidence --chapter --hunk --old-path])",
       "  issue set    <id> <flags> revise a finding",
       "  issue resolve <id>        mark a finding resolved",
       "  issue reopen  <id>        reopen a finding",
+      "  issue verify  <id>        mark a finding's premise verified",
+      "  issue unverify <id>       mark a finding suspected (premise unchecked)",
       "  issue rm     <id>         drop a finding",
       "  issue list                list findings",
     ].join("\n")
@@ -670,6 +787,9 @@ switch (cmd) {
     break;
   case "write":
     cmdWrite(rest[0]);
+    break;
+  case "uncheck":
+    cmdUncheck(rest);
     break;
   case "issue":
     cmdIssue(rest[0], rest.slice(1));
