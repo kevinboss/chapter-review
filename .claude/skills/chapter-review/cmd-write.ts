@@ -1,16 +1,18 @@
 import { existsSync, readFileSync } from "node:fs";
-import { die, isArray, isRecord } from "./util.ts";
+import { die, isArray, isRecord, tryReadJson } from "./util.ts";
 import { gitOk, gitTry, manifestPath, sameCommit, short } from "./git.ts";
 import {
   carryIssues,
   carryReviewed,
   installManifest,
-  readManifestIfValid,
+  issueHighWater,
+  priorStateForCarry,
   readProgress,
   writeProgress,
   withIssues,
 } from "./manifest.ts";
-import { validateManifest } from "./validate.ts";
+import { isManifest, validateManifest } from "./validate.ts";
+import { branchDiff, coverageErrors } from "./diff.ts";
 import type { Issue, Manifest, ReviewedUnit } from "./types.ts";
 
 /** A draft as it arrives from outside: a JSON object whose shape is unverified. */
@@ -44,6 +46,17 @@ export function repinCommits(draft: unknown): string[] {
     }
     draft.headSha = liveHead;
   }
+  // `head` is only validated on the fallback path, so when headSha already
+  // matches HEAD a value like "@" or "HEAD" is installed verbatim and the
+  // extension shows it as the branch name. Re-pin it to the real branch.
+  const head = str(draft, "head");
+  if (head === undefined || HEAD_RELATIVE.test(head)) {
+    const branch = gitTry("rev-parse", "--abbrev-ref", "HEAD");
+    if (branch !== undefined && branch !== "HEAD") {
+      if (head !== undefined) notes.push(`head ${head}->${branch}`);
+      draft.head = branch;
+    }
+  }
   const base = str(draft, "base");
   const liveMergeBase = base ? gitTry("merge-base", base, "HEAD") : undefined;
   if (liveMergeBase) {
@@ -75,8 +88,16 @@ export function repinCommits(draft: unknown): string[] {
 // you are standing in, so they can never testify that a draft belongs here.
 const HEAD_RELATIVE = /^(HEAD|@)([\^~]|@\{|$)/;
 
+// Same shape validate.ts enforces, checked here too because the belongs-here
+// test runs before validation — that is the point, it guards what comes next.
+const SHA = /^[0-9a-f]{7,40}$/i;
+
 function assertDraftBelongsHere(draft: Draft): void {
   const problems: string[] = [];
+  // Resolve the destination first. Outside a repo this dies with "not inside a
+  // git repository"; leaving it to the reporting below printed a tree-mismatch
+  // block first, which misdiagnoses the problem before the real message lands.
+  manifestPath();
   const liveHead = gitTry("rev-parse", "--verify", "--quiet", "HEAD^{commit}");
   const head = str(draft, "head");
   const headSha = str(draft, "headSha");
@@ -97,19 +118,28 @@ function assertDraftBelongsHere(draft: Draft): void {
   // strongest possible evidence, and it settles the case on its own: a draft
   // whose headSha *is* this commit belongs here even if its branch was since
   // renamed, or its merge base has since been pruned.
-  const headShaHere =
-    headSha === undefined
-      ? undefined
-      : gitTry("rev-parse", "--verify", "--quiet", `${headSha}^{commit}`);
-  if (headSha !== undefined && headShaHere === liveHead) {
+  //
+  // Only a literal SHA counts. `headSha: "HEAD"` resolves to whatever tree you
+  // are standing in, so it proves nothing and would vouch for a draft from any
+  // repository — the same reasoning that rules HEAD-relative values out of
+  // `head`, and the wrong-directory footgun this check exists to stop.
+  const literalSha = headSha !== undefined && SHA.test(headSha);
+  const headShaHere = literalSha
+    ? gitTry("rev-parse", "--verify", "--quiet", `${headSha}^{commit}`)
+    : undefined;
+  if (literalSha && headShaHere === liveHead) {
     return;
   }
-
   // Vetoes. A SHA the draft carries that this repository has never contained is
   // objective proof the draft was generated somewhere else — it is not weighed
   // against the name below, it decides. Two unrelated projects are both very
   // often on `main`, so without this the name alone would admit a foreign draft.
-  if (headSha !== undefined && headShaHere === undefined) {
+  //
+  // One line per headSha problem, not two: a non-SHA value is also, trivially,
+  // "not a commit here", and reporting both read as two separate faults.
+  if (headSha !== undefined && !literalSha) {
+    problems.push(`headSha "${headSha}" is not a commit id, so it cannot identify this tree`);
+  } else if (headSha !== undefined && headShaHere === undefined) {
     problems.push(`headSha ${short(headSha) ?? "?"} is not a commit here`);
   }
   if (mergeBase !== undefined && !gitOk("cat-file", "-e", `${mergeBase}^{commit}`)) {
@@ -163,16 +193,14 @@ function assertDraftBelongsHere(draft: Draft): void {
  */
 export function cmdWrite(arg?: string): void {
   const src: string | number = arg ?? 0; // fd 0 = stdin
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(src, "utf8")) as unknown;
-  } catch (e) {
-    die(`chapter-review: could not read draft (${arg ?? "stdin"}): ${(e as Error).message}`);
+  const parsed = tryReadJson(() => readFileSync(src, "utf8"));
+  if (!parsed.ok) {
+    die(`chapter-review: could not read draft (${arg ?? "stdin"}): ${parsed.error}`);
   }
-  if (!isRecord(parsed)) {
+  if (!isRecord(parsed.value)) {
     die("chapter-review: the draft must be a JSON object.");
   }
-  const draft: Draft = parsed;
+  const draft: Draft = parsed.value;
 
   const draftIssues = draft.issues;
   if (isArray(draftIssues) && draftIssues.length > 0) {
@@ -203,54 +231,135 @@ export function cmdWrite(arg?: string): void {
   // an unknown top-level key, say. The write would then succeed having silently
   // dropped every finding and checkmark.
   const draftCheck = validateManifest(draft);
-  if (!draftCheck.ok) {
+  if (!draftCheck.ok || !isManifest(draft)) {
     console.error("chapter-review: change refused, the draft is not a valid partition:");
     for (const e of draftCheck.errors) console.error(`  - ${e}`);
     process.exit(1);
   }
+  assertCoversDiff(draft);
   installDraft(draft, repinned);
 }
 
-/** The read-modify-write half of `write`, run under the manifest lock. */
-function installDraft(draft: Draft, repinned: string[]): void {
-  const asManifest = draft as unknown as Manifest;
-  const priorExisted = existsSync(manifestPath());
-  const prior = readManifestIfValid();
-  if (priorExisted && !prior) {
+/**
+ * Refuse a partition that does not account for the whole diff. The structural
+ * pass works on the manifest alone, so it can see a hunk claimed twice but not
+ * one claimed by nobody — and a review missing a hunk entirely looks complete in
+ * the tree, which is the failure worth a git call to prevent.
+ *
+ * Skipped, with a warning, when git cannot produce the diff: a coverage check
+ * that cannot run must not block a write that is otherwise valid.
+ */
+function assertCoversDiff(manifest: Manifest): void {
+  const diffText = branchDiff(manifest.mergeBase);
+  if (diffText === undefined) {
     console.error(
-      "chapter-review: the previous manifest was unreadable or invalid; " +
-        "installing the new partition, but no findings or checkmarks could be carried forward."
+      "chapter-review: could not read the diff, so coverage was not checked; " +
+        "verify yourself that every hunk is claimed."
+    );
+    return;
+  }
+  // Nothing to review is not a review. A branch level with its base produces an
+  // empty partition that is technically valid, and installing it replaced a real
+  // manifest with zero chapters — the destructive half of switching branches and
+  // regenerating without noticing.
+  if (diffText.trim() === "") {
+    die(
+      `chapter-review: ${manifest.head} has no changes against ${manifest.base}, ` +
+        "so there is nothing to partition.\n" +
+        "  Check you are on the branch you meant to review, and that the base is right."
+    );
+  }
+  const errors = coverageErrors(manifest, diffText);
+  if (errors.length === 0) return;
+  console.error("chapter-review: change refused, the partition does not match the diff:");
+  for (const e of errors) console.error(`  - ${e}`);
+  console.error(
+    "  Every hunk belongs to exactly one chapter, or to unassigned with a reason."
+  );
+  process.exit(1);
+}
+
+/** The read-modify-write half of `write`, run under the manifest lock. */
+function installDraft(asManifest: Manifest, repinned: string[]): void {
+  const priorExisted = existsSync(manifestPath());
+  const { prior, fromBackup } = priorStateForCarry();
+  if (priorExisted && fromBackup) {
+    console.error(
+      "chapter-review: the previous manifest was unreadable; carrying findings and " +
+        `checkmarks forward from the backup (${manifestPath()}.bak) instead.`
+    );
+  } else if (priorExisted && !prior) {
+    console.error(
+      "chapter-review: the previous manifest was unreadable or invalid, and the backup " +
+        "could not be used either; installing the new partition. Findings could not be " +
+        "carried forward; checkmarks are read separately and may still survive."
+    );
+  }
+  // One manifest per repository, so writing while standing on another branch
+  // replaces that branch's review outright. Legitimate (you moved on), but it
+  // took every chapter and finding with it and said nothing.
+  if (prior && prior.head !== asManifest.head) {
+    console.error(
+      `chapter-review: this replaces the review of "${prior.head}" ` +
+        `(${prior.chapters.length} chapters, ${(prior.issues ?? []).length} findings) ` +
+        `with one for "${asManifest.head}". The previous one is only in ${manifestPath()}.bak.`
     );
   }
   const priorIssues: Issue[] = prior?.issues ?? [];
-  const { kept, pruned } = carryIssues(priorIssues, asManifest);
+  const { kept, pruned, moved } = carryIssues(priorIssues, asManifest, prior);
+
+  // From the issues as they were *before* pruning, so an id regeneration drops
+  // is retired rather than handed out again. A draft carries no mark of its own.
+  const seq = issueHighWater(prior, priorIssues);
+  if (seq > 0) asManifest.issueSeq = seq;
 
   // Carry the checkmarks forward too, pruning units whose path left the diff.
   // They live in progress.json; the manifest never carries them again.
-  const priorReviewed: ReviewedUnit[] = readProgress(prior);
-  const carriedReviewed = carryReviewed(priorReviewed, asManifest);
-  delete draft.reviewed;
+  const priorReviewed: ReviewedUnit[] = readProgress();
+  const {
+    kept: carriedReviewed,
+    gone: reviewedGone,
+    merged: reviewedMerged,
+  } = carryReviewed(priorReviewed, asManifest, prior);
 
   // Report how many chapter ids carried over, so an accidental full rebuild
   // (which churns ids and checkmarks) is visible rather than silent.
   const priorChapterIds = new Set((prior?.chapters ?? []).map((c) => c.id));
 
   installManifest(withIssues(asManifest, kept), (stats, dest) => {
-    let line = `Wrote ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
-    if (priorChapterIds.size > 0) {
-      const { chapters } = asManifest;
-      const keptCh = chapters.filter((c) => priorChapterIds.has(c.id)).length;
-      line += `, ${keptCh}/${chapters.length} chapters kept from last run`;
-    }
-    if (kept.length > 0) line += `, ${kept.length} issues preserved`;
-    if (pruned.length > 0) line += `, pruned ${pruned.length} (${pruned.join(", ")})`;
-    if (carriedReviewed.length > 0) line += `, ${carriedReviewed.length} checkmarks kept`;
-    console.log(`${line}.`);
+    const { chapters } = asManifest;
+    const keptCh = chapters.filter((c) => priorChapterIds.has(c.id)).length;
+    // A whole chapter disappearing was only visible by diffing two `show`s: the
+    // "N/M kept" ratio moves, but nothing named the chapter that went.
+    const goneChapters = [...priorChapterIds].filter(
+      (id) => !chapters.some((c) => c.id === id)
+    );
+    // Each clause is appended only when non-zero, so a first write prints the
+    // opening sentence alone. "carried", not "kept": these are rows that survived
+    // path-pruning, and whether one still reads as reviewed is decided against
+    // content by the extension, so "kept" would promise a check the CLI does not do.
+    const clauses = [
+      priorChapterIds.size > 0 && `${keptCh}/${chapters.length} chapters kept from last run`,
+      goneChapters.length > 0 && `dropped ${goneChapters.join(", ")}`,
+      kept.length > 0 && `${kept.length} issues preserved`,
+      pruned.length > 0 && `pruned ${pruned.length} (${pruned.join(", ")})`,
+      carriedReviewed.length > 0 && `${carriedReviewed.length} checkmarks carried`,
+      reviewedGone > 0 && `${reviewedGone} checkmarks dropped (path left the diff)`,
+      reviewedMerged > 0 && `${reviewedMerged} checkmarks folded into a merged hunk`,
+    ].filter((c): c is string => typeof c === "string");
+    const opening = `Wrote ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
+    console.log(`${[opening, ...clauses].join(", ")}.`);
     console.log(`  wrote ${dest}`);
     const { headSha, mergeBase } = asManifest;
     if (headSha) {
       console.log(`  pinned to HEAD ${short(headSha)} (mergeBase ${short(mergeBase)})`);
     }
+    if (carriedReviewed.length > 0) {
+      console.log(
+        "  checkmarks carry by path; the extension re-checks content and re-opens any whose bytes moved"
+      );
+    }
+    for (const m of moved) console.log(`  followed rename ${m}`);
     if (repinned.length > 0) {
       console.log(`  re-pinned ${repinned.join(", ")} to match the working tree`);
     }

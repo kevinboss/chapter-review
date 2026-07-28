@@ -18,13 +18,17 @@ export function cmdUncheck(rest: string[]): void {
   const hunk = flags.hunk !== undefined ? parseHunk(flags.hunk) : undefined;
 
   const manifest = readManifestOrDie();
+  // Refused, not warned: it exited 0 after printing this, so a typo read as
+  // "already unreviewed" — the opposite of what happened. Same verdict as
+  // `issue add` on a path the manifest does not hold.
   if (!pathInManifest(manifest, flags.path)) {
-    console.error(
-      `chapter-review: ${flags.path} isn't in the current manifest; check the path.`
+    die(
+      `chapter-review: ${flags.path} is not in the current manifest, so it has no checkmark to clear.\n` +
+        "  Check the spelling; `chapter-review show` lists the paths."
     );
   }
 
-  const reviewed = readProgress(manifest);
+  const reviewed = readProgress();
   // Keep all but the target: one hunk with --hunk, else every unit of the file.
   const keep = reviewed.filter((u) => {
     if (u.path !== flags.path) return true;

@@ -29,7 +29,7 @@
     "headSha": {
       "type": "string",
       "pattern": "^[0-9a-f]{7,40}$",
-      "description": "Commit head resolved to at generation time. Hunk coordinates refer to mergeBase..headSha; consumers use it to reconstruct exact content after the branch moves. Optional but strongly recommended."
+      "description": "Commit head resolved to at generation time. Hunk coordinates refer to mergeBase..headSha; consumers use it to reconstruct exact content after the branch moves. Always record it."
     },
     "generatedAt": {
       "type": "string",
@@ -54,34 +54,14 @@
       "description": "Per-chapter review findings the chapter-review skill noticed and wants to surface; the extension displays them. Authored by the skill while it reviews the diff (and added to on request during follow-up); durable: the skill MUST carry this array across regeneration (re-mapping each issue's chapterId to the chapter that owns its path/hunk in the new partition), never dropping findings. Optional; absent means none yet.",
       "items": { "$ref": "#/definitions/issue" }
     },
-    "reviewed": {
-      "deprecated": true,
-      "type": "array",
-      "description": "Legacy location for review checkmarks; they now live in <git-dir>/chapter-review/progress.json, which the extension owns outright. Kept accepted here so a manifest written by an older extension is not invalidated; the CLI migrates it into progress.json on the next write and stops emitting it. A unit reads as reviewed only while its stored digest still matches the current content.",
-      "items": { "$ref": "#/definitions/reviewedUnit" }
+    "issueSeq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Highest iss-N number ever allocated. Owned by `chapter-review issue`; never author it. Retained when a finding is removed so its id is never reused by a later `issue add` — findings get quoted into PR comments and chat, where a recycled id would point at a different problem.",
+      "$comment": "Absent means no finding has ever been added."
     }
   },
   "definitions": {
-    "reviewedUnit": {
-      "type": "object",
-      "required": ["path", "digest"],
-      "additionalProperties": false,
-      "properties": {
-        "path": {
-          "$ref": "#/definitions/path",
-          "description": "File the checkmark is on. With hunk, identifies one hunk unit; without, the file's whole-file unit."
-        },
-        "hunk": {
-          "$ref": "#/definitions/hunk",
-          "description": "Present for a hunk-level checkmark; absent means the whole-file unit."
-        },
-        "digest": {
-          "type": "string",
-          "pattern": "^[0-9a-f]+$",
-          "description": "Content fingerprint the unit was checked against, computed by the extension. The checkmark holds only while this matches the current content."
-        }
-      }
-    },
     "issue": {
       "type": "object",
       "required": ["id", "path", "severity", "note"],
@@ -122,7 +102,8 @@
         },
         "createdAt": {
           "type": "string",
-          "format": "date-time"
+          "format": "date-time",
+          "description": "When the finding was first recorded. Set by `chapter-review issue add` and carried across regeneration unchanged, so it dates the observation rather than the manifest. Never author it; absent on findings recorded before this was stamped."
         }
       }
     },

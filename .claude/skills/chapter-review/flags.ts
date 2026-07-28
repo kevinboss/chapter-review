@@ -21,9 +21,15 @@ export interface IssueFields {
   hunk?: Hunk;
 }
 
-const SEVERITY = new Set(["critical", "high", "low"]);
-const ISSUE_STATUS = new Set(["open", "resolved"]);
-const CONFIDENCE = new Set(["suspected", "verified"]);
+const SEVERITY = new Set<string>(["critical", "high", "low"]);
+const ISSUE_STATUS = new Set<string>(["open", "resolved"]);
+const CONFIDENCE = new Set<string>(["suspected", "verified"]);
+
+// Predicates rather than a `has` check plus a cast: the membership test is the
+// proof, so it should be what narrows the type.
+const isSeverity = (v: string): v is Severity => SEVERITY.has(v);
+const isIssueStatus = (v: string): v is IssueStatus => ISSUE_STATUS.has(v);
+const isConfidence = (v: string): v is Confidence => CONFIDENCE.has(v);
 const CHAPTER_ID = /^ch-[0-9]+$/;
 
 const FLAG_ALIASES: Record<string, string> = { "--old-path": "oldPath", "--chapter": "chapterId" };
@@ -33,20 +39,21 @@ const FLAG_ALIASES: Record<string, string> = { "--old-path": "oldPath", "--chapt
  * rejecting an unknown flag or a flag given without a value.
  */
 export function parseFlags(argv: string[], allowed: string[]): Flags {
-  const out: Flags = {};
-  for (let i = 0; i < argv.length; i++) {
-    const tok = argv[i];
+  // Every flag here takes a value, so tokens strictly alternate `--flag value`.
+  // Pairing them up says that outright, where walking an index and consuming the
+  // next token left the stride implicit.
+  //
+  // .at() rather than indexing for the value: indexing is typed `string`, which
+  // would narrow the guard below away, but a flag given as the last token
+  // genuinely has none. .at() reports the `string | undefined` that occurs.
+  const pairs = argv.flatMap((tok, i) => (i % 2 === 0 ? [[tok, argv.at(i + 1)] as const] : []));
+  return pairs.reduce<Flags>((out, [tok, val]) => {
     if (!tok.startsWith("--")) die(`chapter-review: unexpected argument "${tok}"`);
     const key = FLAG_ALIASES[tok] ?? tok.slice(2);
     if (!allowed.includes(key)) die(`chapter-review: unknown flag "${tok}"`);
-    // .at() rather than [++i]: indexing is typed `string`, which would narrow
-    // the guard below away, but a flag given as the last token genuinely has no
-    // value. .at() reports the `string | undefined` that actually occurs.
-    const val = argv.at(++i);
     if (val === undefined) die(`chapter-review: ${tok} needs a value`);
-    out[key] = val;
-  }
-  return out;
+    return { ...out, [key]: val };
+  }, {});
 }
 
 /** Parse a "oldStart,oldLines,newStart,newLines" spec into a Hunk. */
@@ -78,10 +85,10 @@ export function issueFieldsFromFlags(flags: Flags): IssueFields {
   if (flags.oldPath !== undefined) fields.oldPath = flags.oldPath;
   if (flags.note !== undefined) fields.note = flags.note;
   if (flags.severity !== undefined) {
-    if (!SEVERITY.has(flags.severity)) {
+    if (!isSeverity(flags.severity)) {
       die(`chapter-review: --severity must be one of ${[...SEVERITY].join(", ")}`);
     }
-    fields.severity = flags.severity as Severity;
+    fields.severity = flags.severity;
   }
   if (flags.chapterId !== undefined) {
     if (!CHAPTER_ID.test(flags.chapterId)) {
@@ -90,16 +97,16 @@ export function issueFieldsFromFlags(flags: Flags): IssueFields {
     fields.chapterId = flags.chapterId;
   }
   if (flags.confidence !== undefined) {
-    if (!CONFIDENCE.has(flags.confidence)) {
+    if (!isConfidence(flags.confidence)) {
       die(`chapter-review: --confidence must be one of ${[...CONFIDENCE].join(", ")}`);
     }
-    fields.confidence = flags.confidence as Confidence;
+    fields.confidence = flags.confidence;
   }
   if (flags.status !== undefined) {
-    if (!ISSUE_STATUS.has(flags.status)) {
+    if (!isIssueStatus(flags.status)) {
       die(`chapter-review: --status must be one of ${[...ISSUE_STATUS].join(", ")}`);
     }
-    fields.status = flags.status as IssueStatus;
+    fields.status = flags.status;
   }
   if (flags.hunk !== undefined) fields.hunk = parseHunk(flags.hunk);
   return fields;
