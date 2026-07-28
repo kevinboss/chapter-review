@@ -48,6 +48,7 @@
       "chapterId": "ch-2",
       "severity": "high",
       "note": "Token expiry isn't validated before trusting the claims.",
+      "confidence": "verified",
       "status": "open",
       "createdAt": "2026-06-01T12:30:00Z"
     }

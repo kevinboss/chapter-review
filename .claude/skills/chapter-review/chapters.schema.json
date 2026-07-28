@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/kevinboss/chapter-review/main/.claude/skills/chapter-review/chapters.schema.json",
   "title": "Chapter review manifest",
-  "description": "Partition of a branch diff into logical review chapters. Written by the chapter-review skill to <git-dir>/chapter-review/chapters.json (tool state inside .git, keeping the worktree clean), consumed by the chapter-review VSCode extension. Structural rules only; the partition rules (every hunk in exactly one chapter or unassigned, no overlaps) are enforced by validate.mjs alongside this file, which is authoritative if the two disagree.",
+  "description": "Partition of a branch diff into logical review chapters. Written by the chapter-review skill to <git-dir>/chapter-review/chapters.json (tool state inside .git, keeping the worktree clean), consumed by the chapter-review VSCode extension. Structural rules only; the partition rules (every hunk in exactly one chapter or unassigned, no overlaps) are enforced by validate.ts alongside this file, which is authoritative if the two disagree.",
   "type": "object",
   "required": ["version", "base", "head", "mergeBase", "generatedAt", "chapters", "unassigned"],
   "additionalProperties": false,
@@ -53,9 +53,35 @@
       "type": "array",
       "description": "Per-chapter review findings the chapter-review skill noticed and wants to surface; the extension displays them. Authored by the skill while it reviews the diff (and added to on request during follow-up); durable: the skill MUST carry this array across regeneration (re-mapping each issue's chapterId to the chapter that owns its path/hunk in the new partition), never dropping findings. Optional; absent means none yet.",
       "items": { "$ref": "#/definitions/issue" }
+    },
+    "reviewed": {
+      "deprecated": true,
+      "type": "array",
+      "description": "Legacy location for review checkmarks; they now live in <git-dir>/chapter-review/progress.json, which the extension owns outright. Kept accepted here so a manifest written by an older extension is not invalidated; the CLI migrates it into progress.json on the next write and stops emitting it. A unit reads as reviewed only while its stored digest still matches the current content.",
+      "items": { "$ref": "#/definitions/reviewedUnit" }
     }
   },
   "definitions": {
+    "reviewedUnit": {
+      "type": "object",
+      "required": ["path", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/path",
+          "description": "File the checkmark is on. With hunk, identifies one hunk unit; without, the file's whole-file unit."
+        },
+        "hunk": {
+          "$ref": "#/definitions/hunk",
+          "description": "Present for a hunk-level checkmark; absent means the whole-file unit."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]+$",
+          "description": "Content fingerprint the unit was checked against, computed by the extension. The checkmark holds only while this matches the current content."
+        }
+      }
+    },
     "issue": {
       "type": "object",
       "required": ["id", "path", "severity", "note"],
@@ -85,6 +111,10 @@
           "type": "string",
           "minLength": 1,
           "description": "The finding."
+        },
+        "confidence": {
+          "enum": ["suspected", "verified"],
+          "description": "Whether the finding's premise has been checked. Omitted defaults to \"suspected\": noted on a read-through, premise not yet confirmed. \"verified\" means the premise was checked against the code. Lets a first-pass finding say \"verify before relying on this\", so a shaky note isn't read as settled."
         },
         "status": {
           "enum": ["open", "resolved"],
@@ -138,11 +168,11 @@
           "type": "array",
           "minItems": 1,
           "items": { "$ref": "#/definitions/hunk" },
-          "description": "Omitted = the file's entire diff belongs to this entry (typical for added/deleted files). Present = only these hunks belong here; the file may then appear in other chapters with disjoint hunks."
+          "description": "Omitted = the whole file's diff belongs to this entry, so ranges aren't enumerated. Fine for any file whose changes all sit in one chapter, not only added/deleted files: a modified file with several hunks that all belong here should omit hunks too. Present = only these hunks belong here; the file may then appear in other chapters with disjoint hunks."
         },
         "note": {
           "type": "string",
-          "description": "Role of this file in this chapter. Only when the file appears in multiple chapters."
+          "description": "Role of this file in this chapter. Only when the file is split and this entry's scope isn't obvious — across several chapters, or between a chapter and unassigned (where it flags which part is the real change). The unassigned side carries only its reason; note is forbidden there."
         }
       }
     },
@@ -163,7 +193,7 @@
         "reason": {
           "type": "string",
           "minLength": 1,
-          "description": "Why this was quarantined, e.g. \"generated\", \"snapshot\", \"autoformat\"."
+          "description": "Why this was quarantined, e.g. \"generated\", \"snapshot\", \"autoformat\". When a hand edit elsewhere drove the change, name that driver by path (\"regenerated by the bump in foo/bar.json\") and never by chapter id: ids are stable only within a generation and nothing rewrites prose that cites them, so a cited id goes stale silently."
         }
       }
     },
