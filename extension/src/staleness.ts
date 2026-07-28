@@ -1,4 +1,4 @@
-import { gitMergeBase, gitRevParse } from "./gitContent";
+import { gitMergeBase, gitRevParse } from "./git";
 import { Manifest } from "./model";
 
 export interface Staleness {

@@ -1,5 +1,7 @@
 // TypeScript mirror of .claude/skills/chapter-review/chapters.schema.json (contract version 1).
 
+import { errorMessage } from "./util";
+
 export interface Hunk {
   oldStart: number;
   oldLines: number;
@@ -54,8 +56,8 @@ export interface Issue {
 
 /**
  * A checked-off review unit, with the content digest it was checked against.
- * Progress lives in the manifest so the CLI can carry it across regeneration
- * and clear it (`uncheck`); the extension writes it as the reviewer ticks boxes.
+ * Lives in progress.json: the CLI carries it across regeneration and clears it
+ * (`uncheck`); the extension writes it as the reviewer ticks boxes.
  */
 export interface ReviewedUnit {
   path: string;
@@ -74,7 +76,6 @@ export interface Manifest {
   chapters: Chapter[];
   unassigned: UnassignedEntry[];
   issues?: Issue[];
-  reviewed?: ReviewedUnit[];
 }
 
 export function isOpen(issue: Issue): boolean {
@@ -86,18 +87,38 @@ export function isOpen(issue: Issue): boolean {
  * via the skill's validate.ts). Enough to fail loudly on wrong versions or
  * truncated files instead of rendering garbage.
  */
-export function parseManifest(text: string): Manifest {
-  let data: unknown;
+function parseJson(text: string): unknown {
   try {
-    data = JSON.parse(text);
+    return JSON.parse(text);
   } catch (e) {
-    throw new Error(`chapters.json is not valid JSON: ${(e as Error).message}`, {
-      cause: e,
-    });
+    throw new Error(`chapters.json is not valid JSON: ${errorMessage(e)}`, { cause: e });
   }
-  const m = data as Partial<Manifest>;
+}
+
+/** Narrowing companion to the checks in parseManifest, so it needs no cast. */
+function hasManifestShape(m: Record<string, unknown>): m is Manifest & Record<string, unknown> {
+  return (
+    m.version === 1 &&
+    Array.isArray(m.chapters) &&
+    Array.isArray(m.unassigned) &&
+    typeof m.mergeBase === "string" &&
+    m.mergeBase.length > 0 &&
+    typeof m.base === "string" &&
+    m.base.length > 0 &&
+    typeof m.head === "string" &&
+    m.head.length > 0
+  );
+}
+
+export function parseManifest(text: string): Manifest {
+  const parsed = parseJson(text);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("chapters.json: must be an object");
+  }
+  const m: Record<string, unknown> = { ...parsed };
+  // Reported individually, since each says something different about the file.
   if (m.version !== 1) {
-    throw new Error(`unsupported chapters.json version: ${m.version}`);
+    throw new Error(`unsupported chapters.json version: ${String(m.version)}`);
   }
   if (!Array.isArray(m.chapters) || !Array.isArray(m.unassigned)) {
     throw new Error("chapters.json: chapters/unassigned must be arrays");
@@ -105,7 +126,10 @@ export function parseManifest(text: string): Manifest {
   if (!m.mergeBase || !m.base || !m.head) {
     throw new Error("chapters.json: base, head and mergeBase are required");
   }
-  return m as Manifest;
+  if (!hasManifestShape(m)) {
+    throw new Error("chapters.json: base, head and mergeBase must be strings");
+  }
+  return m;
 }
 
 /**

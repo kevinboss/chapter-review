@@ -15,6 +15,7 @@ import { isOpen, Manifest, parseManifest, ReviewedUnit } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
 import { checkStaleness } from "./staleness";
+import { errorMessage } from "./util";
 import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, ViewMode } from "./tree";
 
 // Relative to the repo's git dir: tool state lives inside .git, invisible to
@@ -28,6 +29,16 @@ const VIEW_MODE_KEY = "chapterReview.viewMode";
 
 // Fingerprint of manifest bytes, so the extension can recognize its own writes.
 const sha = (data: Uint8Array): string => createHash("sha256").update(data).digest("hex");
+
+/** progress.json as the extension expects to find it. */
+function hasReviewedArray(doc: unknown): doc is { reviewed: ReviewedUnit[] } {
+  return (
+    typeof doc === "object" &&
+    doc !== null &&
+    "reviewed" in doc &&
+    Array.isArray(doc.reviewed)
+  );
+}
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // The skill installer needs neither a git repo nor a manifest, so register
@@ -52,9 +63,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const manifestUri = vscode.Uri.joinPath(gitDirUri, MANIFEST_PATH);
   const progressUri = vscode.Uri.joinPath(gitDirUri, PROGRESS_PATH);
 
-  // Hash of the last manifest we wrote, so the watcher can skip our own writes.
-  let lastWrittenHash: string | undefined;
-  let lastProgressHash: string | undefined;
+  // Hash of the last content we wrote, so the watcher can skip our own writes.
+  // A container because these are reassigned from the closures below.
+  const lastWritten: { manifest?: string; progress?: string } = {};
 
   const progress = new ReviewProgress();
   const focus = new FocusStore(gitDirUri);
@@ -94,7 +105,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (e) {
       provider.manifest = undefined;
       if (!(e instanceof vscode.FileSystemError)) {
-        void vscode.window.showErrorMessage(`Chapter Review: ${(e as Error).message}`);
+        void vscode.window.showErrorMessage(`Chapter Review: ${errorMessage(e)}`);
       }
     }
     progress.load(await readProgressUnits());
@@ -112,28 +123,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       : new Map<string, string>();
   }
 
-  /**
-   * Checkmarks from progress.json, falling back to the manifest's legacy
-   * `reviewed` so a review started before the split is not lost. The next
-   * persist writes progress.json and the CLI drops the legacy key.
-   */
+  /** Checkmarks from progress.json; undefined when it is absent or unreadable. */
   async function readProgressUnits(): Promise<ReviewedUnit[] | undefined> {
     try {
       const bytes = await vscode.workspace.fs.readFile(progressUri);
       const doc: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
-      if (doc && typeof doc === "object" && Array.isArray((doc as { reviewed?: unknown }).reviewed)) {
-        return (doc as { reviewed: ReviewedUnit[] }).reviewed;
-      }
-      return undefined;
+      return hasReviewedArray(doc) ? doc.reviewed : undefined;
     } catch {
-      return provider.manifest?.reviewed;
+      return undefined;
     }
   }
 
   // Write the manifest, remembering its hash so the watcher skips this write.
   async function persistManifest(m: Manifest): Promise<void> {
     const buf = Buffer.from(JSON.stringify(m, null, 2) + "\n", "utf8");
-    lastWrittenHash = sha(buf);
+    lastWritten.manifest = sha(buf);
     await vscode.workspace.fs.writeFile(manifestUri, buf);
   }
 
@@ -151,7 +155,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     const doc = { version: 1, reviewed: progress.toReviewedUnits(m) };
     const buf = Buffer.from(JSON.stringify(doc, null, 2) + "\n", "utf8");
-    lastProgressHash = sha(buf);
+    lastWritten.progress = sha(buf);
     const tmp = vscode.Uri.joinPath(gitDirUri, `${PROGRESS_PATH}.${process.pid}.tmp`);
     await vscode.workspace.fs.writeFile(tmp, buf);
     await vscode.workspace.fs.rename(tmp, progressUri, { overwrite: true });
@@ -180,10 +184,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // The resource behind the active editor: the modified side of a diff, or a
   // plain editor's document. Used to recover the real file from a diff view.
   function activeReviewUri(): vscode.Uri | undefined {
-    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input as
-      | { modified?: vscode.Uri; uri?: vscode.Uri }
-      | undefined;
-    return input?.modified ?? input?.uri;
+    // The tab input is `unknown` by design: its shape depends on the editor kind
+    // (diff, text, notebook, custom). Read the two fields that interest us if
+    // they are there, rather than claiming a shape this tab may not have.
+    const { input } = vscode.window.tabGroups.activeTabGroup.activeTab ?? {};
+    if (typeof input !== "object" || input === null) {
+      return undefined;
+    }
+    const fields = new Map<string, unknown>(Object.entries(input));
+    const uriField = (key: string): vscode.Uri | undefined => {
+      const v = fields.get(key);
+      return v instanceof vscode.Uri ? v : undefined;
+    };
+    return uriField("modified") ?? uriField("uri");
   }
 
   // Opens the real working-tree file behind a diff side, at the current line.
@@ -219,22 +232,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!m?.issues) {
       return;
     }
-    let changed = false;
-    for (const { id, resolved } of updates) {
-      const issue = m.issues.find((i) => i.id === id);
-      if (issue && !isOpen(issue) !== resolved) {
-        issue.status = resolved ? "resolved" : "open";
-        changed = true;
+    const changed = updates.filter(({ id, resolved }) => {
+      const issue = m.issues?.find((i) => i.id === id);
+      if (!issue || !isOpen(issue) === resolved) {
+        return false;
       }
-    }
-    if (!changed) {
+      issue.status = resolved ? "resolved" : "open";
+      return true;
+    });
+    if (changed.length === 0) {
       return;
     }
     try {
       await persistManifest(m);
     } catch (e) {
       void vscode.window.showErrorMessage(
-        `Chapter Review: could not update the issue: ${(e as Error).message}`
+        `Chapter Review: could not update the issue: ${errorMessage(e)}`
       );
       return;
     }
@@ -249,17 +262,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(PATCHED_SCHEME, patchedDocs),
     view.onDidChangeCheckboxState(async (e) => {
       const issueUpdates: { id: string; resolved: boolean }[] = [];
-      let progressChanged = false;
-      for (const [n, state] of e.items) {
-        const node = n;
+      const progressNodes = [...e.items].filter(([node, state]) => {
         const checked = state === vscode.TreeItemCheckboxState.Checked;
         if (node.kind === "issue") {
           issueUpdates.push({ id: node.issue.id, resolved: checked });
-        } else {
-          progress.setReviewed(provider.reviewUnitsFor(node), checked);
-          progressChanged = true;
+          return false;
         }
-      }
+        progress.setReviewed(provider.reviewUnitsFor(node), checked);
+        return true;
+      });
+      const progressChanged = progressNodes.length > 0;
       if (issueUpdates.length > 0) {
         await setIssuesResolved(issueUpdates);
       }
@@ -296,7 +308,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   async function onManifestWritten(): Promise<void> {
     try {
       const bytes = await vscode.workspace.fs.readFile(manifestUri);
-      if (sha(bytes) === lastWrittenHash) {
+      if (sha(bytes) === lastWritten.manifest) {
         return;
       }
     } catch {
@@ -313,7 +325,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   async function onProgressWritten(): Promise<void> {
     try {
       const bytes = await vscode.workspace.fs.readFile(progressUri);
-      if (sha(Buffer.from(bytes)) === lastProgressHash) {
+      if (sha(Buffer.from(bytes)) === lastWritten.progress) {
         return; // our own write
       }
     } catch {

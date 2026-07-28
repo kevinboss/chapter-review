@@ -61,32 +61,36 @@ export class DiffViewer {
 
     const left =
       entry.status === "added" ? gitUri("", entry.path) : gitUri(m.mergeBase, oldName);
-    let right: vscode.Uri;
-    const options: vscode.TextDocumentShowOptions = {};
+    const { right, line } = await (async (): Promise<{
+      right: vscode.Uri;
+      line: number | undefined;
+    }> => {
+      if (entry.hunks && entry.status !== "added" && entry.status !== "deleted") {
+        // Chapter-scoped view: right side is merge-base content with only this
+        // entry's hunks applied, so the diff shows nothing but this chapter.
+        const [oldText, newText] = await Promise.all([
+          gitShow(this.folderUri.fsPath, m.mergeBase, oldName),
+          gitShow(this.folderUri.fsPath, headRef, entry.path),
+        ]);
+        const patch = applyHunks(oldText, newText, entry.hunks);
+        const scoped = patchedUri(ownerId, entry.path);
+        this.patchedDocs.set(scoped, patch.text);
 
-    if (entry.hunks && entry.status !== "added" && entry.status !== "deleted") {
-      // Chapter-scoped view: right side is merge-base content with only this
-      // entry's hunks applied, so the diff shows nothing but this chapter.
-      const [oldText, newText] = await Promise.all([
-        gitShow(this.folderUri.fsPath, m.mergeBase, oldName),
-        gitShow(this.folderUri.fsPath, headRef, entry.path),
-      ]);
-      const patch = applyHunks(oldText, newText, entry.hunks);
-      right = patchedUri(ownerId, entry.path);
-      this.patchedDocs.set(right, patch.text);
-
-      const focus = focusHunk ?? entry.hunks[0];
-      const line = Math.max(0, (patch.changeLines.get(focus) ?? 1) - 1);
-      options.selection = new vscode.Range(line, 0, line, 0);
-    } else {
+        const focus = focusHunk ?? entry.hunks[0];
+        return { right: scoped, line: Math.max(0, (patch.changeLines.get(focus) ?? 1) - 1) };
+      }
       // No scoped diff (whole-file claim, or an added/deleted file): the right
       // side is the real head file, so a focus hunk's newStart is the real line.
-      right = entry.status === "deleted" ? gitUri("", entry.path) : gitUri(headRef, entry.path);
-      if (focusHunk && entry.status !== "deleted") {
-        const line = Math.max(0, focusHunk.newStart - 1);
-        options.selection = new vscode.Range(line, 0, line, 0);
-      }
-    }
+      return {
+        right: entry.status === "deleted" ? gitUri("", entry.path) : gitUri(headRef, entry.path),
+        line:
+          focusHunk && entry.status !== "deleted"
+            ? Math.max(0, focusHunk.newStart - 1)
+            : undefined,
+      };
+    })();
+    const options: vscode.TextDocumentShowOptions =
+      line === undefined ? {} : { selection: new vscode.Range(line, 0, line, 0) };
     await vscode.commands.executeCommand("vscode.diff", left, right, title, options);
   }
 
