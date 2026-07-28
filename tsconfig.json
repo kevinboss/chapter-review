@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    // es2024 rather than es2025 because the skill documents a Node 22.18 floor, and
+    // the es2025 lib assumes RegExp.escape / Promise.try, which land later than that.
+    "target": "es2024",
+    // `lib` is stated, not left implied: omitting it selects lib.<target>.FULL,
+    // which bundles DOM into a Node-only codebase (a global `Node` interface
+    // that silently shadows this project's own `Node` union, for one).
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "moduleDetection": "force",
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    // Node strips types file-by-file with no cross-file knowledge, so the source
+    // must be valid under isolated-module rules and must contain only erasable
+    // syntax. Without erasableSyntaxOnly an enum or namespace type-checks fine
+    // and then throws at runtime under `node file.ts`.
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["scripts/**/*.ts", "test/**/*.ts", "eslint.config.ts"]
+}

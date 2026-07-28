@@ -1,11 +1,24 @@
 {
   "compilerOptions": {
-    "module": "commonjs",
-    "target": "ES2022",
-    "lib": ["ES2022"],
+    // Unlike the type-stripped projects, this one emits: commonjs because a classic
+    // VSCode extension is loaded as CJS, and es2023 because the floor is whatever
+    // Node ships inside the oldest supported VSCode (1.90 -> Node 20). es2024 would
+    // assume Object.groupBy, which Node 20 does not have.
+    // Explicit resolution: without it, different tsc versions pick different
+    // defaults and the root toolchain falls back to classic resolution, which
+    // cannot resolve "node:" specifiers. node16 + no "type" in package.json
+    // still emits the CommonJS a classic VSCode extension is loaded as.
+    "module": "node16",
+    "moduleResolution": "node16",
+    "types": ["node", "vscode"],
+    "target": "es2023",
+    // `lib` stated for the reason given in the root tsconfig.json.
+    "lib": ["es2023"],
     "outDir": "out",
     "rootDir": "src",
     "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
     "sourceMap": true,
     "skipLibCheck": true
   },

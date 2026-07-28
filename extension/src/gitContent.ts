@@ -11,7 +11,7 @@ export function resolveGitDir(cwd: string): Promise<string | undefined> {
       "git",
       ["rev-parse", "--absolute-git-dir"],
       { cwd },
-      (err, stdout) => resolve(err ? undefined : stdout.trim())
+      (err, stdout) => { resolve(err ? undefined : stdout.trim()); }
     );
   });
 }
@@ -27,7 +27,7 @@ export function gitShow(repoRoot: string, ref: string, path: string): Promise<st
       ["show", `${ref}:${path}`],
       { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 },
       // File absent at ref (e.g. stale manifest): empty side beats an error.
-      (err, stdout) => resolve(err ? "" : stdout)
+      (err, stdout) => { resolve(err ? "" : stdout); }
     );
   });
 }
@@ -36,7 +36,7 @@ export function gitShow(repoRoot: string, ref: string, path: string): Promise<st
 export function gitRevParse(repoRoot: string, ref: string): Promise<string | undefined> {
   return new Promise((resolve) => {
     execFile("git", ["rev-parse", ref], { cwd: repoRoot }, (err, stdout) =>
-      resolve(err ? undefined : stdout.trim() || undefined)
+      { resolve(err ? undefined : stdout.trim() || undefined); }
     );
   });
 }
@@ -49,7 +49,7 @@ export function gitMergeBase(
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
     execFile("git", ["merge-base", a, b], { cwd: repoRoot }, (err, stdout) =>
-      resolve(err ? undefined : stdout.trim() || undefined)
+      { resolve(err ? undefined : stdout.trim() || undefined); }
     );
   });
 }
@@ -92,7 +92,7 @@ export function reviewUriPath(uri: vscode.Uri): string | undefined {
   }
   if (uri.scheme === PATCHED_SCHEME) {
     // path is /<ownerId>/<relPath>; ownerId never contains a slash.
-    return uri.path.replace(/^\/+/, "").match(/^[^/]+\/(.+)$/)?.[1];
+    return (/^[^/]+\/(.+)$/.exec(uri.path.replace(/^\/+/, "")))?.[1];
   }
   return undefined;
 }

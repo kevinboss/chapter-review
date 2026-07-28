@@ -7,19 +7,43 @@
 // scripted reference manifest — the parse-classify-validate flow below is a
 // dry run of what the skill has to do.
 //
-// CLI: node scripts/make-demo.mjs [--manifest]
+// CLI: node scripts/make-demo.ts [--manifest]
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync, cpSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { validateManifest } from "../.claude/skills/chapter-review/validate.mjs";
+import { validateManifest } from "../.claude/skills/chapter-review/validate.ts";
+import type { FileEntry, FileStatus, Manifest } from "../.claude/skills/chapter-review/types.ts";
+
+/** One hunk of the parsed diff, with the +/- lines kept for classification. */
+interface ParsedHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  changed: string[];
+}
+
+/** One file of the parsed diff. */
+interface ParsedFile {
+  path: string;
+  oldPath?: string;
+  status: FileStatus;
+  hunks: ParsedHunk[];
+}
+
+/** The hunks of one path claimed by one owner. */
+interface Entry {
+  file: ParsedFile;
+  hunks: ParsedHunk[];
+}
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const demo = path.join(root, "demo");
 const fixtures = path.join(root, "demo-fixtures");
 
-function git(...args) {
+function git(...args: string[]): string {
   return execFileSync("git", args, { cwd: demo, encoding: "utf8" }).trim();
 }
 
@@ -37,7 +61,7 @@ git("config", "commit.gpgsign", "false");
 // let build artifacts into the demo history.
 const copyOpts = {
   recursive: true,
-  filter: (src) => !/[\\/](bin|obj)([\\/]|$)/.test(src),
+  filter: (src: string): boolean => !/[\\/](bin|obj)([\\/]|$)/.test(src),
 };
 
 cpSync(path.join(fixtures, "before"), demo, copyOpts);
@@ -77,16 +101,17 @@ if (!process.argv.includes("--manifest")) {
 
 // --- parse the real diff ----------------------------------------------------
 
-function parseDiff(text) {
+function parseDiff(text: string): ParsedFile[] {
   return text
     .split(/^diff --git /m)
     .slice(1)
     .map((section) => {
       const lines = section.split("\n");
-      const paths = lines[0].match(/^a\/(\S+) b\/(\S+)$/);
+      const paths = /^a\/(\S+) b\/(\S+)$/.exec(lines[0]);
+      if (!paths) throw new Error(`unparsable diff header: ${lines[0]}`);
       let filePath = paths[2];
-      let oldPath;
-      let status = "modified";
+      let oldPath: string | undefined;
+      let status: FileStatus = "modified";
 
       const firstHunk = lines.findIndex((l) => l.startsWith("@@"));
       const header = lines.slice(0, firstHunk === -1 ? lines.length : firstHunk);
@@ -105,17 +130,18 @@ function parseDiff(text) {
         }
       }
 
-      const hunks = [];
+      const hunks: ParsedHunk[] = [];
       if (firstHunk !== -1) {
-        let current = null;
+        let current: ParsedHunk | null = null;
         for (const line of lines.slice(firstHunk)) {
-          const h = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+          const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
           if (h) {
+            const count = (v: string | undefined): number => (v === undefined ? 1 : Number(v));
             current = {
-              oldStart: +h[1],
-              oldLines: h[2] === undefined ? 1 : +h[2],
-              newStart: +h[3],
-              newLines: h[4] === undefined ? 1 : +h[4],
+              oldStart: Number(h[1]),
+              oldLines: count(h.at(2)),
+              newStart: Number(h[3]),
+              newLines: count(h.at(4)),
               changed: [],
             };
             hunks.push(current);
@@ -148,26 +174,26 @@ const CHAPTERS = [
   { id: "ch-5", title: "Bump xunit to 2.7.0" },
 ];
 
-function isWhitespaceOnly(changed) {
-  const strip = (prefix) =>
+function isWhitespaceOnly(changed: string[]): boolean {
+  const strip = (prefix: string): string =>
     changed
-      .filter((l) => l[0] === prefix)
+      .filter((l) => l.startsWith(prefix))
       .map((l) => l.slice(1).replace(/\s+/g, ""))
       .join("\n");
   const removed = strip("-");
   return removed.length > 0 && removed === strip("+");
 }
 
-function classifyHunk(changed) {
+function classifyHunk(changed: string[]): string {
   const text = changed.join("\n");
   if (isWhitespaceOnly(changed)) return "unassigned:autoformat";
   if (/Guard|Ensure/.test(text)) return "ch-3";
   if (/INotifier|QueueNotifier|Demo\.Notifications|\.Notify\(/.test(text)) return "ch-2";
-  if (/EmailNotifier/.test(text)) return "ch-1";
+  if (text.includes('EmailNotifier')) return "ch-1";
   throw new Error(`unclassifiable hunk:\n${text}`);
 }
 
-function ownersFor(file) {
+function ownersFor(file: ParsedFile): (hunk: ParsedHunk) => string {
   if (file.path === "packages.lock.json") return () => "unassigned:generated";
   if (file.path === "Demo.csproj") return () => "ch-5";
   if (file.path.startsWith("tests/")) return () => "ch-4";
@@ -177,7 +203,7 @@ function ownersFor(file) {
 }
 
 // owner -> path -> { file, hunks }
-const assignments = new Map();
+const assignments = new Map<string, Map<string, Entry>>();
 let parsedHunks = 0;
 for (const file of files) {
   const owner = ownersFor(file);
@@ -185,7 +211,10 @@ for (const file of files) {
     parsedHunks++;
     const key = owner(hunk);
     let perPath = assignments.get(key);
-    if (!perPath) assignments.set(key, (perPath = new Map()));
+    if (!perPath) {
+      perPath = new Map<string, Entry>();
+      assignments.set(key, perPath);
+    }
     let entry = perPath.get(file.path);
     if (!entry) perPath.set(file.path, (entry = { file, hunks: [] }));
     entry.hunks.push(hunk);
@@ -195,34 +224,40 @@ for (const file of files) {
 // --- emit the manifest -------------------------------------------------------
 
 // A path owned by a single owner collapses to a whole-file claim.
-const ownersPerPath = new Map();
+const ownersPerPath = new Map<string, number>();
 for (const [owner, perPath] of assignments) {
   for (const p of perPath.keys()) {
     ownersPerPath.set(p, (ownersPerPath.get(p) ?? 0) + (owner ? 1 : 0));
   }
 }
 
-function emitEntry(owner, { file, hunks }) {
-  const entry = { path: file.path };
-  if (file.oldPath) entry.oldPath = file.oldPath;
-  entry.status = file.status;
-  if (ownersPerPath.get(file.path) > 1) {
-    entry.hunks = [...hunks]
-      .sort((a, b) => a.newStart - b.newStart)
-      .map(({ oldStart, oldLines, newStart, newLines }) => ({
-        oldStart,
-        oldLines,
-        newStart,
-        newLines,
-      }));
-  }
-  if (owner.startsWith("unassigned:")) {
-    entry.reason = owner.slice("unassigned:".length);
-  }
-  return entry;
+function emitEntry(owner: string, { file, hunks }: Entry): FileEntry {
+  // Built in one expression rather than mutated field by field, so the result is
+  // a FileEntry at every point instead of an incomplete object TS has to widen.
+  const split = (ownersPerPath.get(file.path) ?? 0) > 1;
+  return {
+    path: file.path,
+    ...(file.oldPath ? { oldPath: file.oldPath } : {}),
+    status: file.status,
+    ...(split
+      ? {
+          hunks: [...hunks]
+            .sort((a, b) => a.newStart - b.newStart)
+            .map(({ oldStart, oldLines, newStart, newLines }) => ({
+              oldStart,
+              oldLines,
+              newStart,
+              newLines,
+            })),
+        }
+      : {}),
+    ...(owner.startsWith("unassigned:")
+      ? { reason: owner.slice("unassigned:".length) }
+      : {}),
+  };
 }
 
-const manifest = {
+const manifest: Manifest = {
   version: 1,
   base: "main",
   head: "feat/queue-notifications",

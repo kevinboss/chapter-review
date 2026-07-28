@@ -28,9 +28,11 @@ export function buildFolderTree(ownerId: string, files: FileNode[]): Node[] {
       let label = prefix + name;
       let current = sub;
       while (current.files.length === 0 && current.dirs.size === 1) {
-        const [next] = current.dirs.entries().next().value as [string, Dir];
+        const only = current.dirs.entries().next();
+        if (only.done) break;
+        const [next, child] = only.value;
         label += "/" + next;
-        current = current.dirs.get(next)!;
+        current = child;
       }
       nodes.push({
         kind: "folder",

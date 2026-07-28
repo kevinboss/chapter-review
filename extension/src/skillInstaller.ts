@@ -58,7 +58,7 @@ async function readSkillVersion(skillMd: vscode.Uri): Promise<string | undefined
   try {
     const bytes = await vscode.workspace.fs.readFile(skillMd);
     const text = Buffer.from(bytes).toString("utf8");
-    return text.match(/^\s*version:\s*["']?([^"'\n]+?)["']?\s*$/m)?.[1];
+    return (/^\s*version:\s*["']?([^"'\n]+?)["']?\s*$/m.exec(text))?.[1];
   } catch {
     return undefined;
   }
@@ -111,7 +111,7 @@ export type SkillStatus = "missing" | "present" | "current";
  */
 export function computeSkillStatus(
   bundledVersion: string | undefined,
-  installedVersions: ReadonlyArray<string | undefined>
+  installedVersions: readonly (string | undefined)[]
 ): SkillStatus {
   if (!bundledVersion) {
     return "current"; // no bundled skill: nothing to offer
@@ -175,7 +175,7 @@ export async function installSkill(
     if (!pick) {
       return;
     }
-    target = pick.target;
+    ({ target } = pick);
   }
 
   const existing = await readSkillVersion(vscode.Uri.joinPath(target.dir, "SKILL.md"));
