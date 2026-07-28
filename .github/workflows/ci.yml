@@ -14,13 +14,39 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-      - name: Validator regression tests
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            extension/package-lock.json
+      # The repo root now carries dev-only tooling (ESLint, TypeScript). None of
+      # it is needed to *run* the skill — see the portability check below — but
+      # linting and type-checking need it installed.
+      - run: npm ci
+      # extension/src is covered by both `eslint .` (typed linting) and the
+      # fourth typecheck project, whose `types: ["node", "vscode"]` resolves
+      # @types/vscode from extension/node_modules. Without this the contract job
+      # fails with TS2688 and a few hundred no-unsafe-* errors on error-typed
+      # vscode values.
+      - name: Install extension dev deps (lint and typecheck reach extension/src)
+        run: npm ci
+        working-directory: extension
+      - name: Lint
+        run: npm run lint
+      - name: Type-check (all four projects)
+        run: npm run typecheck
+      - name: Validator + CLI tests
         run: npm test
       - name: Portability check (skill runs standalone, no node_modules)
+        # Copies the skill the way a consumer would and runs it with nothing
+        # installed, so a dev-only dependency can never sneak into the runtime
+        # path. Exercises the CLI entrypoint too, not just the validator.
         run: |
           cp -r .claude/skills/chapter-review "$RUNNER_TEMP/skill"
           cd "$RUNNER_TEMP/skill"
-          node validate.mjs example-chapters.json
+          test ! -e node_modules || (echo "node_modules leaked into the skill" && exit 1)
+          node validate.ts example-chapters.json
+          node chapter-review --help
+          ./chapter-review --help
 
   extension:
     name: Extension build
@@ -40,3 +66,21 @@ jobs:
         run: npm run compile
       - name: Package .vsix (build verification)
         run: npm run package
+      - name: The .vsix must ship a runnable skill
+        # `.vscodeignore` excludes `**/*.ts` for the extension's own sources, but
+        # the bundled skill's TypeScript *is* its runtime form. Getting this wrong
+        # produces a .vsix whose "Install Skill" reports success and then fails
+        # with ERR_MODULE_NOT_FOUND, and only on the Marketplace path — the
+        # release-zip path is packaged separately and would still work. Assert on
+        # the real package contents, then run what it would install.
+        run: |
+          npx vsce ls --no-dependencies > /tmp/vsix-files.txt
+          for f in main.ts validate.ts cmd-write.ts manifest.ts git.ts flags.ts util.ts types.ts chapter-review package.json; do
+            grep -qx "skill/$f" /tmp/vsix-files.txt || { echo "MISSING from .vsix: skill/$f"; exit 1; }
+          done
+          rm -rf /tmp/vsix-skill && mkdir -p /tmp/vsix-skill
+          while read -r f; do
+            case "$f" in skill/*) mkdir -p "/tmp/vsix-skill/$(dirname "${f#skill/}")"; cp "$f" "/tmp/vsix-skill/${f#skill/}";; esac
+          done < /tmp/vsix-files.txt
+          node /tmp/vsix-skill/chapter-review --help
+          node /tmp/vsix-skill/validate.ts /tmp/vsix-skill/example-chapters.json

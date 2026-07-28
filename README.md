@@ -30,13 +30,15 @@ The extension is purely a review surface.
 1. **Install the extension** — get **Chapter Review** from the [VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=kevinboss.chapter-review), or download `chapter-review-<version>.vsix` from [Releases](https://github.com/kevinboss/chapter-review/releases) and run "Extensions: Install from VSIX…" in VSCode (or `code --install-extension <file>.vsix`).
 2. **Install the skill** — the extension bundles it. Run **Chapter Review: Install Skill** from the Command Palette (or click **Install the skill** in the empty Chapters view) and pick a location: `~/.claude/skills/` for every repo, or the current workspace only. Restart your coding agent so it loads the skill; the extension prompts you to update it when a newer version ships.
 
-Installing the skill by hand instead: copy `.claude/skills/chapter-review/` into your repo's `.claude/skills/`, or unzip `chapter-review-skill.zip` from a release there. It needs only `git` and `node`.
+Installing the skill by hand instead: copy `.claude/skills/chapter-review/` into your repo's `.claude/skills/`, or unzip `chapter-review-skill.zip` from a release there. It needs `git` and `node` 22.18 or newer.
 
 ## Repository layout
 
-- **`.claude/skills/chapter-review/`** — the Claude Code skill and its self-contained contract. Partitions the current branch's diff into chapters and writes the manifest to `<git-dir>/chapter-review/chapters.json` in the target repo (inside `.git`, so the worktree and git status stay clean). The folder bundles everything it needs: `SKILL.md`, `chapters.schema.json` (draft-07 contract), `validate.mjs` (zero-dependency validator, authoritative), and `example-chapters.json` (worked example). Copy the folder into any repo's `.claude/skills/` to install; only `git` and `node` are required.
+- **`.claude/skills/chapter-review/`** — the Claude Code skill and its self-contained contract. Partitions the current branch's diff into chapters and writes the manifest to `<git-dir>/chapter-review/chapters.json` in the target repo (inside `.git`, so the worktree and git status stay clean). The folder bundles everything it needs: `SKILL.md`, the `chapter-review` CLI (TypeScript, no build step), `chapters.schema.json` (draft-07 contract), `validate.ts` (zero-dependency validator, authoritative), and `example-chapters.json` (worked example). Copy the folder into any repo's `.claude/skills/` to install; `git` and `node` 22.18 or newer are required.
 - **`.claude/skills/demo/`** — `/demo` skill: rebuild the C# demo, generate its manifest via the chapter-review skill in a sub-agent, launch the extension dev host.
-- **`scripts/`** — `test.mjs` regression-tests the validator; `make-demo.mjs` builds the demo repo. Run tests with `npm test` (no dependencies).
+- **`scripts/`** — `make-demo.ts` builds the demo repo.
+- **Tooling** — `eslint.config.ts` (flat config, typescript-eslint strict-type-checked with typed linting) plus four `tsconfig.json` projects covering the skill CLI, the extension, the extension's build scripts, and the root scripts/tests. `npm run lint` and `npm run typecheck` gate both in CI. These are dev-only: the skill folder still runs with no install.
+- **`test/`** — `node:test` suites: `validate.test.ts` covers the validator, `cli.test.ts` drives the CLI end-to-end against throwaway git repos. Run with `npm test`.
 - **`extension/`** — VSCode extension that renders `chapters.json` as a tree (list + tree views), opens diffs on click in the same style as the native git history, and tracks review progress per hunk.
 
 ## Design decisions
@@ -53,7 +55,7 @@ Run `npm install && npm run compile` in `extension/` once, then F5. Two launch t
 - **Run Extension (C# demo)** — run `npm run demo` first to build `demo/`, a throwaway git repo from `demo-fixtures/{before,after}` (an order-service branch: swaps email for a queue, renames a helper, updates tests, bumps xunit). Generating its manifest is the skill's job: run the chapter-review skill against `demo/` (the skill's end-to-end test), or `npm run demo -- --manifest` for the scripted reference. Then open the **Chapter Review** side bar → Chapters.
 - **Run Extension** — opens this repo itself against its own committed fixture manifest.
 
-`npm test` runs the validator regression tests and the standalone-portability check (no dependencies).
+`npm test` runs the `node:test` suites: validator unit tests and CLI end-to-end tests against throwaway git repos.
 
 ## Status
 

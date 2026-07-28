@@ -11,3 +11,11 @@ scripts/**
 .vscodeignore
 .npmrc
 node_modules/**
+
+# ...except the bundled skill, whose TypeScript *is* its runtime form: Node
+# strips the types at load, so skill/*.ts are shipped files, not sources. The
+# `**/*.ts` rule above would otherwise strip every module out of the skill and
+# leave the shim importing a main.ts that isn't there — an install that reports
+# success and then fails with ERR_MODULE_NOT_FOUND on first use. Keep this last;
+# in .vscodeignore the final matching pattern wins.
+!skill/**

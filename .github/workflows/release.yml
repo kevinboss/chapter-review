@@ -46,7 +46,8 @@ jobs:
       - name: Bundle the skill
         run: |
           cd .claude/skills
-          zip -r "$GITHUB_WORKSPACE/chapter-review-skill.zip" chapter-review
+          zip -r "$GITHUB_WORKSPACE/chapter-review-skill.zip" chapter-review \
+            -x "chapter-review/node_modules/*" "chapter-review/tsconfig.json" "chapter-review/package-lock.json"
 
       - name: Publish GitHub Release
         env:
