@@ -2,11 +2,18 @@
 # dev tooling stay out of the .vsix.
 .vscode/**
 .vscode-test/**
+.vscode-test.mjs
 src/**
+out/test/**
 **/*.ts
 **/*.map
 tsconfig.json
+tsconfig.package.json
 scripts/**
+
+# Nothing references this one: package.json points at media/icon.png, and the
+# viewsContainer at media/chapter-review.svg.
+media/icon.svg
 .gitignore
 .vscodeignore
 .npmrc
