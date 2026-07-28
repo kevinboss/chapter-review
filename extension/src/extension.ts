@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as vscode from "vscode";
 import { DiffViewer } from "./diffViewer";
 import { FocusStore, focusForNode } from "./focus";
@@ -10,7 +11,7 @@ import {
   reviewUriPath,
 } from "./gitContent";
 import { computeDigests } from "./fingerprint";
-import { isOpen, parseManifest } from "./model";
+import { isOpen, Manifest, parseManifest, ReviewedUnit } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
 import { checkStaleness } from "./staleness";
@@ -19,7 +20,14 @@ import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, ViewMode } fr
 // Relative to the repo's git dir: tool state lives inside .git, invisible to
 // git status and impossible to commit by accident.
 const MANIFEST_PATH = "chapter-review/chapters.json";
+// Review checkmarks live in their own document, written only here. The manifest
+// belongs to the agent's CLI; when both wrote chapters.json, each side's
+// whole-file read-modify-write could silently drop the other's edit.
+const PROGRESS_PATH = "chapter-review/progress.json";
 const VIEW_MODE_KEY = "chapterReview.viewMode";
+
+// Fingerprint of manifest bytes, so the extension can recognize its own writes.
+const sha = (data: Uint8Array): string => createHash("sha256").update(data).digest("hex");
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // The skill installer needs neither a git repo nor a manifest, so register
@@ -42,8 +50,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   const gitDirUri = vscode.Uri.file(gitDir);
   const manifestUri = vscode.Uri.joinPath(gitDirUri, MANIFEST_PATH);
+  const progressUri = vscode.Uri.joinPath(gitDirUri, PROGRESS_PATH);
 
-  const progress = new ReviewProgress(context.workspaceState);
+  // Hash of the last manifest we wrote, so the watcher can skip our own writes.
+  let lastWrittenHash: string | undefined;
+  let lastProgressHash: string | undefined;
+
+  const progress = new ReviewProgress();
   const focus = new FocusStore(gitDirUri);
   const patchedDocs = new PatchedContentProvider();
 
@@ -84,6 +97,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(`Chapter Review: ${(e as Error).message}`);
       }
     }
+    progress.load(await readProgressUnits());
     await refreshDigests();
     await refreshStaleness();
   }
@@ -91,13 +105,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Fingerprints the reviewed content of each unit so checkmarks track content,
   // not hunk coordinates: a regenerated chapter drops the check on units whose
   // content moved. Recomputed only here (on manifest change), since digests are
-  // a pure function of the manifest's pinned commits. reconcile() then binds any
-  // pre-digest checks to the content present now, so upgrading loses no progress.
+  // a pure function of the manifest's pinned commits.
   async function refreshDigests(): Promise<void> {
     provider.digests = provider.manifest
       ? await computeDigests(folderUri.fsPath, provider.manifest)
-      : new Map();
-    await progress.reconcile(provider.digests);
+      : new Map<string, string>();
+  }
+
+  /**
+   * Checkmarks from progress.json, falling back to the manifest's legacy
+   * `reviewed` so a review started before the split is not lost. The next
+   * persist writes progress.json and the CLI drops the legacy key.
+   */
+  async function readProgressUnits(): Promise<ReviewedUnit[] | undefined> {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(progressUri);
+      const doc: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
+      if (doc && typeof doc === "object" && Array.isArray((doc as { reviewed?: unknown }).reviewed)) {
+        return (doc as { reviewed: ReviewedUnit[] }).reviewed;
+      }
+      return undefined;
+    } catch {
+      return provider.manifest?.reviewed;
+    }
+  }
+
+  // Write the manifest, remembering its hash so the watcher skips this write.
+  async function persistManifest(m: Manifest): Promise<void> {
+    const buf = Buffer.from(JSON.stringify(m, null, 2) + "\n", "utf8");
+    lastWrittenHash = sha(buf);
+    await vscode.workspace.fs.writeFile(manifestUri, buf);
+  }
+
+  /**
+   * Persist the checked set to progress.json and repaint from memory (only
+   * checkmarks changed, so no reload or digest recompute).
+   *
+   * Written via a temp file and rename: the CLI reads this document, and an
+   * in-place write can hand it a truncated file.
+   */
+  async function persistProgress(): Promise<void> {
+    const m = provider.manifest;
+    if (!m) {
+      return;
+    }
+    const doc = { version: 1, reviewed: progress.toReviewedUnits(m) };
+    const buf = Buffer.from(JSON.stringify(doc, null, 2) + "\n", "utf8");
+    lastProgressHash = sha(buf);
+    const tmp = vscode.Uri.joinPath(gitDirUri, `${PROGRESS_PATH}.${process.pid}.tmp`);
+    await vscode.workspace.fs.writeFile(tmp, buf);
+    await vscode.workspace.fs.rename(tmp, progressUri, { overwrite: true });
+    provider.refresh();
+    updateSummary();
   }
 
   // Re-checks whether the manifest's pinned commit still matches the branch and
@@ -172,17 +231,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
     try {
-      await vscode.workspace.fs.writeFile(
-        manifestUri,
-        Buffer.from(JSON.stringify(m, null, 2) + "\n", "utf8")
-      );
+      await persistManifest(m);
     } catch (e) {
       void vscode.window.showErrorMessage(
         `Chapter Review: could not update the issue: ${(e as Error).message}`
       );
       return;
     }
-    await reload();
   }
 
   context.subscriptions.push(
@@ -194,20 +249,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(PATCHED_SCHEME, patchedDocs),
     view.onDidChangeCheckboxState(async (e) => {
       const issueUpdates: { id: string; resolved: boolean }[] = [];
+      let progressChanged = false;
       for (const [n, state] of e.items) {
-        const node = n as Node;
+        const node = n;
         const checked = state === vscode.TreeItemCheckboxState.Checked;
         if (node.kind === "issue") {
           issueUpdates.push({ id: node.issue.id, resolved: checked });
         } else {
-          await progress.setReviewed(provider.reviewUnitsFor(node), checked);
+          progress.setReviewed(provider.reviewUnitsFor(node), checked);
+          progressChanged = true;
         }
       }
       if (issueUpdates.length > 0) {
         await setIssuesResolved(issueUpdates);
       }
-      provider.refresh();
-      updateSummary();
+      // persistProgress repaints; if only issues changed, repaint here instead.
+      if (progressChanged) {
+        await persistProgress();
+      } else {
+        provider.refresh();
+        updateSummary();
+      }
     }),
     view.onDidChangeSelection(async (e) => {
       const node = e.selection[0] as Node | undefined;
@@ -217,27 +279,64 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.commands.registerCommand("chapterReview.refresh", reload),
-    vscode.commands.registerCommand("chapterReview.viewAsTree", () => setViewMode("tree")),
-    vscode.commands.registerCommand("chapterReview.viewAsList", () => setViewMode("list")),
+    vscode.commands.registerCommand("chapterReview.viewAsTree", () => { setViewMode("tree"); }),
+    vscode.commands.registerCommand("chapterReview.viewAsList", () => { setViewMode("list"); }),
     vscode.commands.registerCommand("chapterReview.openDiff", (node: FileNode | HunkNode) =>
       diffViewer.openDiff(node)
     ),
     vscode.commands.registerCommand("chapterReview.openFile", openFile),
     vscode.commands.registerCommand("chapterReview.openIssue", openIssue),
     vscode.commands.registerCommand("chapterReview.resetProgress", async () => {
-      await progress.clear();
-      provider.refresh();
-      updateSummary();
+      progress.clear();
+      await persistProgress();
     })
   );
 
+  // Skip reloads caused by our own writes; a CLI write differs and still reloads.
+  async function onManifestWritten(): Promise<void> {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(manifestUri);
+      if (sha(bytes) === lastWrittenHash) {
+        return;
+      }
+    } catch {
+      // Fall through: reload() handles a missing or unreadable manifest.
+    }
+    await reload();
+  }
+
   // Base the watcher on the git dir, which may sit outside the workspace
   // folder (worktrees); RelativePattern with a Uri base handles that.
+  // progress.json is written by this extension and by `chapter-review uncheck`,
+  // so an external change has to repaint the checkmarks. Cheaper than the
+  // manifest path: only the checked set changed, so no reload or digest work.
+  async function onProgressWritten(): Promise<void> {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(progressUri);
+      if (sha(Buffer.from(bytes)) === lastProgressHash) {
+        return; // our own write
+      }
+    } catch {
+      /* deleted: fall through and repaint as empty */
+    }
+    progress.load(await readProgressUnits());
+    provider.refresh();
+    updateSummary();
+  }
+
+  const progressWatcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(gitDirUri, PROGRESS_PATH)
+  );
+  progressWatcher.onDidCreate(() => void onProgressWritten());
+  progressWatcher.onDidChange(() => void onProgressWritten());
+  progressWatcher.onDidDelete(() => void onProgressWritten());
+  context.subscriptions.push(progressWatcher);
+
   const watcher = vscode.workspace.createFileSystemWatcher(
     new vscode.RelativePattern(gitDirUri, MANIFEST_PATH)
   );
-  watcher.onDidCreate(reload);
-  watcher.onDidChange(reload);
+  watcher.onDidCreate(onManifestWritten);
+  watcher.onDidChange(onManifestWritten);
   watcher.onDidDelete(reload);
   context.subscriptions.push(watcher);
 
@@ -262,4 +361,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void reload();
 }
 
-export function deactivate(): void {}
+// Nothing to tear down: every disposable is registered on the extension
+// context, which VSCode disposes for us.
+export function deactivate(): void {
+  /* no-op */
+}

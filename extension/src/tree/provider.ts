@@ -322,8 +322,11 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     const item = new vscode.TreeItem(issue.note, vscode.TreeItemCollapsibleState.None);
     item.id = `issue:${issue.id}`;
     const resolved = !isOpen(issue);
-    item.description = resolved ? `${issue.severity} · resolved` : issue.severity;
-    item.tooltip = `${issue.severity.toUpperCase()}${resolved ? " (resolved)" : ""}: ${issue.note}\n${issue.path}`;
+    const confidence = issue.confidence === "verified" ? "verified" : "suspected";
+    const parts: string[] = [issue.severity, confidence];
+    if (resolved) parts.push("resolved");
+    item.description = parts.join(" · ");
+    item.tooltip = `${issue.severity.toUpperCase()} · ${confidence}${resolved ? " · resolved" : ""}: ${issue.note}\n${issue.path}`;
     item.iconPath = issueIcon(issue);
     // Same checkbox affordance as files: ticked means resolved. Its toggle is
     // routed to the manifest (not review progress) by the checkbox handler.
@@ -367,9 +370,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
 
 // Every issue node keeps an icon so it reads as an issue at a glance. The
 // neutral (i) is the baseline flag; open critical/high swap in a colored
-// severity glyph. Resolved state and exact severity live in the checkbox and
-// the row description, so resolved issues fall back to (i) rather than a
-// redundant checkmark.
+// severity glyph. The checkbox and row description carry resolved state along
+// with the exact severity and confidence, so resolved issues fall back to (i)
+// rather than a redundant checkmark.
 function issueIcon(issue: Issue): vscode.ThemeIcon {
   if (issue.status !== "resolved") {
     if (issue.severity === "critical") {
