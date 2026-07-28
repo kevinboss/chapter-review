@@ -11,8 +11,9 @@
 //
 // CLI: node validate.ts <manifest.json>
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { tryReadJson } from "./util.ts";
 import type { FileEntry, FileStatus, Hunk, Manifest, ValidationResult } from "./types.ts";
 
 type Push = (msg: string) => void;
@@ -22,7 +23,6 @@ const SEVERITY = new Set(["critical", "high", "low"]);
 const ISSUE_STATUS = new Set(["open", "resolved"]);
 const CONFIDENCE = new Set(["suspected", "verified"]);
 const SHA = /^[0-9a-f]{7,40}$/;
-const DIGEST = /^[0-9a-f]+$/;
 const CHAPTER_ID = /^ch-[0-9]+$/;
 const ISSUE_ID = /^iss-[0-9]+$/;
 const PATH = /^[^/]/; // repo-relative, no leading slash
@@ -186,19 +186,6 @@ function checkIssue(issue: unknown, label: string, push: Push): void {
   );
 }
 
-function checkReviewedUnit(u: unknown, label: string, push: Push): void {
-  if (!isObject(u)) {
-    push(`${label} must be an object`);
-    return;
-  }
-  checkPath(u.path, `${label}.path`, push);
-  if (u.hunk !== undefined) checkHunk(u.hunk, `${label}.hunk`, push);
-  if (typeof u.digest !== "string" || !DIGEST.test(u.digest)) {
-    push(`${label}.digest must be a hex string`);
-  }
-  noExtraKeys(u, ["path", "hunk", "digest"], label, push);
-}
-
 function structuralErrors(m: unknown): string[] {
   const errors: string[] = [];
   const push: Push = (msg) => errors.push(`schema: ${msg}`);
@@ -226,18 +213,19 @@ function structuralErrors(m: unknown): string[] {
   if (m.summary !== undefined && typeof m.summary !== "string") {
     push("summary must be a string");
   }
-  const { chapters, unassigned, issues, reviewed } = m;
+  if (
+    m.issueSeq !== undefined &&
+    (typeof m.issueSeq !== "number" || !Number.isInteger(m.issueSeq) || m.issueSeq < 0)
+  ) {
+    push("issueSeq, when present, must be a non-negative integer");
+  }
+  const { chapters, unassigned, issues } = m;
   if (!isArray(chapters)) push("chapters must be an array");
   if (!isArray(unassigned)) push("unassigned must be an array");
   if (issues !== undefined && !isArray(issues)) push("issues, when present, must be an array");
-  // `reviewed` moved to progress.json. Still accepted here, not rejected: an
-  // extension older than that change writes it into the manifest, and refusing
-  // it would make every CLI command fail against a perfectly usable file. The
-  // CLI migrates it out on the next write.
-  if (reviewed !== undefined && !isArray(reviewed)) push("reviewed, when present, must be an array");
   noExtraKeys(
     m,
-    ["version", "base", "head", "mergeBase", "headSha", "generatedAt", "summary", "chapters", "unassigned", "issues", "reviewed"],
+    ["version", "base", "head", "mergeBase", "headSha", "generatedAt", "summary", "chapters", "unassigned", "issues", "issueSeq"],
     "manifest",
     push
   );
@@ -262,11 +250,6 @@ function structuralErrors(m: unknown): string[] {
       }
     });
   }
-  if (isArray(reviewed)) {
-    reviewed.forEach((u, i) => {
-      checkReviewedUnit(u, `reviewed[${i}]`, push);
-    });
-  }
   return errors;
 }
 
@@ -278,6 +261,31 @@ interface Claim {
 }
 
 /**
+ * Narrows to Manifest once structuralErrors has come back clean. The checks here
+ * are the ones the compiler needs to see; structuralErrors is what actually
+ * establishes the rest, field by field, and reports it in detail.
+ */
+function hasManifestShape(m: unknown): m is Manifest {
+  return (
+    isObject(m) &&
+    typeof m.base === "string" &&
+    typeof m.head === "string" &&
+    typeof m.mergeBase === "string" &&
+    typeof m.generatedAt === "string" &&
+    isArray(m.chapters) &&
+    isArray(m.unassigned)
+  );
+}
+
+/**
+ * True when `x` satisfies the whole contract. The narrowing companion to
+ * validateManifest, for callers that want the type rather than the errors.
+ */
+export function isManifest(x: unknown): x is Manifest {
+  return validateManifest(x).ok;
+}
+
+/**
  * Validate a parsed chapters.json against the contract: structure first, then
  * the partition rules structure can't express (no hunk claimed twice, no
  * overlapping ranges). Returns the stats on success or the collected errors.
@@ -285,10 +293,12 @@ interface Claim {
 export function validateManifest(manifest: unknown): ValidationResult {
   const structural = structuralErrors(manifest);
   if (structural.length > 0) return { ok: false, errors: structural };
-
-  // Checked, not assumed: structuralErrors above returned clean, which is exactly
-  // the proof that this shape holds. Everything below is therefore fully typed.
-  const m = manifest as Manifest;
+  // A predicate rather than an assertion, so the narrowing below is something the
+  // compiler agrees with instead of something this file claims.
+  if (!hasManifestShape(manifest)) {
+    return { ok: false, errors: ["schema: manifest must be an object"] };
+  }
+  const m = manifest;
   const errors: string[] = [];
 
   const ids = new Set<string>();
@@ -311,8 +321,8 @@ export function validateManifest(manifest: unknown): ValidationResult {
         `${file.path} (${owner}): oldPath given but status is "${file.status}"`
       );
     }
-    let claims = byPath.get(file.path);
-    if (!claims) byPath.set(file.path, (claims = []));
+    const claims = byPath.get(file.path) ?? [];
+    if (!byPath.has(file.path)) byPath.set(file.path, claims);
     claims.push({ owner, status: file.status, hunks: file.hunks ?? null });
   }
 
@@ -335,25 +345,25 @@ export function validateManifest(manifest: unknown): ValidationResult {
     const hunkClaims = claims.flatMap((c) =>
       (c.hunks ?? []).map((h) => ({ owner: c.owner, h }))
     );
-    for (let i = 0; i < hunkClaims.length; i++) {
-      for (let j = i + 1; j < hunkClaims.length; j++) {
-        const { owner: ownerA, h: a } = hunkClaims[i];
-        const { owner: ownerB, h: b } = hunkClaims[j];
-        if (
-          a.oldStart === b.oldStart &&
-          a.oldLines === b.oldLines &&
-          a.newStart === b.newStart &&
-          a.newLines === b.newLines
-        ) {
-          errors.push(
-            `${p}: identical hunk @@ -${a.oldStart},${a.oldLines} +${a.newStart},${a.newLines} @@ claimed by ${ownerA} and ${ownerB}`
-          );
-        } else if (
-          spansOverlap(a.newStart, a.newLines, b.newStart, b.newLines) ||
-          spansOverlap(a.oldStart, a.oldLines, b.oldStart, b.oldLines)
-        ) {
-          errors.push(`${p}: overlapping hunks claimed by ${ownerA} and ${ownerB}`);
-        }
+    // Every unordered pair, once: index i against every later index.
+    const pairs = hunkClaims.flatMap((first, i) =>
+      hunkClaims.slice(i + 1).map((second) => [first, second] as const)
+    );
+    for (const [{ owner: ownerA, h: a }, { owner: ownerB, h: b }] of pairs) {
+      if (
+        a.oldStart === b.oldStart &&
+        a.oldLines === b.oldLines &&
+        a.newStart === b.newStart &&
+        a.newLines === b.newLines
+      ) {
+        errors.push(
+          `${p}: identical hunk @@ -${a.oldStart},${a.oldLines} +${a.newStart},${a.newLines} @@ claimed by ${ownerA} and ${ownerB}`
+        );
+      } else if (
+        spansOverlap(a.newStart, a.newLines, b.newStart, b.newLines) ||
+        spansOverlap(a.oldStart, a.oldLines, b.oldStart, b.oldLines)
+      ) {
+        errors.push(`${p}: overlapping hunks claimed by ${ownerA} and ${ownerB}`);
       }
     }
   }
@@ -383,23 +393,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error("usage: node validate.ts <manifest.json>");
     process.exit(2);
   }
-  let text: string;
-  try {
-    text = readFileSync(target, "utf8");
-  } catch {
-    // A missing or unreadable path is ordinary CLI misuse; report it as such
-    // rather than letting an ENOENT stack trace out.
+  // A missing or unreadable path is ordinary CLI misuse; report it as such
+  // rather than letting an ENOENT stack trace out.
+  if (!existsSync(target)) {
     console.error(`validate: cannot read ${target}`);
     process.exit(2);
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (e) {
-    console.error(`validate: ${target} is not valid JSON: ${(e as Error).message}`);
+  const parsed = tryReadJson(() => readFileSync(target, "utf8"));
+  if (!parsed.ok) {
+    console.error(`validate: ${target} is not readable as JSON: ${parsed.error}`);
     process.exit(2);
   }
-  const result = validateManifest(parsed);
+  const result = validateManifest(parsed.value);
   if (result.ok) {
     const { stats } = result;
     console.log(

@@ -53,35 +53,37 @@ export function cmdBaseCheck(argBase?: string): void {
   const candidates = [`origin/${leaf}`, leaf].filter(
     (c) => c !== base && gitOk("rev-parse", "--verify", "--quiet", c)
   );
-  let fresher: { base: string; mergeBase: string; ahead: number } | undefined;
-  for (const c of candidates) {
-    const cmb = gitTry("merge-base", c, "HEAD");
-    if (!cmb || !mergeBase) continue;
-    if (!sameCommit(cmb, mergeBase) && gitOk("merge-base", "--is-ancestor", mergeBase, cmb)) {
+  const fresher = candidates
+    .flatMap((c) => {
+      const cmb = gitTry("merge-base", c, "HEAD");
+      if (!cmb || !mergeBase) return [];
+      if (sameCommit(cmb, mergeBase) || !gitOk("merge-base", "--is-ancestor", mergeBase, cmb)) {
+        return [];
+      }
       const ahead = Number(gitTry("rev-list", "--count", `${mergeBase}..${cmb}`)) || 0;
-      if (!fresher || ahead > fresher.ahead) fresher = { base: c, mergeBase: cmb, ahead };
-    }
-  }
+      return [{ base: c, mergeBase: cmb, ahead }];
+    })
+    .reduce<{ base: string; mergeBase: string; ahead: number } | undefined>(
+      (best, c) => (best === undefined || c.ahead > best.ahead ? c : best),
+      undefined
+    );
 
   // (2) Network check: does the real remote disagree with our tracking ref? A
   // differing tip means origin/<leaf> is unfetched; only a fetch moves the fork
   // point forward. Best-effort, skipped when there's no origin or it's offline.
-  let unfetched = false;
-  let remoteReachable: boolean | null = null;
-  if (gitTry("remote", "get-url", "origin")) {
-    const { reachable, tip } = lsRemoteTip(leaf);
-    remoteReachable = reachable;
-    if (reachable && tip) {
-      result.remoteTip = tip;
-      const trackingSha = gitTry("rev-parse", `origin/${leaf}`);
-      // Only a tracking ref that exists AND disagrees means "unfetched". A repo
-      // with no refs/remotes/origin/<leaf> at all — a bare or mirror clone, or a
-      // branch fetched by refspec — has nothing to compare, and calling that
-      // "unfetched" makes the caller stop and prompt on an up-to-date repo.
-      if (trackingSha !== undefined && !sameCommit(tip, trackingSha)) unfetched = true;
-    }
-  }
-  result.remoteReachable = remoteReachable;
+  // Only a tracking ref that exists AND disagrees means "unfetched". A repo with
+  // no refs/remotes/origin/<leaf> at all — a bare or mirror clone, or a branch
+  // fetched by refspec — has nothing to compare, and calling that "unfetched"
+  // makes the caller stop and prompt on an up-to-date repo.
+  const remote = gitTry("remote", "get-url", "origin") ? lsRemoteTip(leaf) : undefined;
+  const trackingSha = gitTry("rev-parse", `origin/${leaf}`);
+  const unfetched =
+    remote?.reachable === true &&
+    remote.tip !== undefined &&
+    trackingSha !== undefined &&
+    !sameCommit(remote.tip, trackingSha);
+  if (remote?.reachable === true && remote.tip !== undefined) result.remoteTip = remote.tip;
+  result.remoteReachable = remote === undefined ? null : remote.reachable;
 
   if (fresher) {
     result.suggestedBase = fresher.base;
@@ -106,7 +108,7 @@ export function cmdBaseCheck(argBase?: string): void {
   } else {
     result.action = "ok";
     result.message =
-      remoteReachable === false
+      remote?.reachable === false
         ? `Base ${base} looks current locally; the remote check was skipped (unreachable).`
         : `Base ${base} is current.`;
   }

@@ -2,6 +2,7 @@
 // repos, and drive the CLI as a subprocess. Not a test file itself (the `test`
 // script globs *.test.ts), so it never runs on its own.
 
+import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,6 +11,7 @@ import path from "node:path";
 // Type-only, so it erases at runtime: the tests describe the same manifest the
 // CLI does, and reusing its types keeps the two from drifting.
 import type { Chapter, Manifest, ReviewedUnit } from "../.claude/skills/chapter-review/types.ts";
+import { isManifest } from "../.claude/skills/chapter-review/validate.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const SKILL_DIR = path.join(here, "..", ".claude", "skills", "chapter-review");
@@ -95,19 +97,27 @@ export function makeRepo(): TestRepo {
     progressPath,
     mergeBase: git("merge-base", "main", "HEAD").trim(),
     headSha: git("rev-parse", "HEAD").trim(),
-    // The CLI validated whatever it wrote, so trusting the shape here is safe;
-    // a test asserting on a malformed manifest wants the cast to fail loudly.
-    readManifest: (): Manifest => JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest,
+    // Checked rather than asserted: the CLI validated whatever it wrote, so a
+    // failure here means the CLI wrote something invalid, which is exactly what
+    // a test should shout about instead of quietly typing it as a Manifest.
+    readManifest: (): Manifest => {
+      const parsed: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+      if (!isManifest(parsed)) {
+        throw new Error(`the CLI wrote a manifest that does not validate: ${manifestPath}`);
+      }
+      return parsed;
+    },
     // `unknown` on purpose: tests deliberately write malformed manifests too.
     writeManifest: (m: unknown): void =>
       { writeFileSync(manifestPath, JSON.stringify(m, null, 2) + "\n"); },
     // Checkmarks live in their own document, written by the extension and by
     // `uncheck`; the manifest no longer carries them.
-    readProgress: (): ReviewedUnit[] =>
-      existsSync(progressPath)
-        ? ((JSON.parse(readFileSync(progressPath, "utf8")) as { reviewed?: ReviewedUnit[] })
-            .reviewed ?? [])
-        : [],
+    readProgress: (): ReviewedUnit[] => {
+      if (!existsSync(progressPath)) return [];
+      const doc: unknown = JSON.parse(readFileSync(progressPath, "utf8"));
+      if (typeof doc !== "object" || doc === null || !("reviewed" in doc)) return [];
+      return isReviewedUnits(doc.reviewed) ? doc.reviewed : [];
+    },
     writeProgress: (units: ReviewedUnit[]): void => {
       writeFileSync(progressPath, JSON.stringify({ version: 1, reviewed: units }, null, 2) + "\n");
     },
@@ -121,6 +131,40 @@ export function makeRepo(): TestRepo {
 export function makeNonGitDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(path.join(tmpdir(), "cr-nongit-"));
   return { dir, cleanup: (): void => { rmSync(dir, { recursive: true, force: true }); } };
+}
+
+/** Shape check for progress.json's `reviewed`, so reading it needs no cast. */
+function isReviewedUnits(v: unknown): v is ReviewedUnit[] {
+  const hasPath = (u: unknown): boolean =>
+    typeof u === "object" && u !== null && "path" in u && typeof u.path === "string";
+  return Array.isArray(v) && v.every((u: unknown) => hasPath(u));
+}
+
+/**
+ * JSON a test reads back to assert on an ad-hoc shape. The single assertion the
+ * suite keeps: the alternative is a bespoke predicate for every partial shape a
+ * test happens to poke at, which is noise rather than safety in a test.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-unnecessary-type-parameters
+export const readJsonAs = <T>(p: string): T => JSON.parse(readFileSync(p, "utf8")) as T;
+
+/** Run `body(repo)` against a fresh fixture repo, always cleaning up after. */
+export function withRepo(body: (repo: TestRepo) => void): void {
+  const repo = makeRepo();
+  try {
+    body(repo);
+  } finally {
+    repo.cleanup();
+  }
+}
+
+/** A repo with OK_CHAPTERS already installed, ready for issue/uncheck/regen tests. */
+export function withWrittenRepo(body: (repo: TestRepo) => void): void {
+  withRepo((repo) => {
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, OK_CHAPTERS) });
+    assert.equal(r.code, 0, `setup write failed: ${r.all}`);
+    body(repo);
+  });
 }
 
 /** A partition draft over the fixture's diff, with optional extra top-level keys. */

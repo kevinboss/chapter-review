@@ -2,7 +2,7 @@
 // (the current manifest), each printed straight to stdout.
 
 import { existsSync, readFileSync } from "node:fs";
-import { die } from "./util.ts";
+import { die, errorMessage, isRecord, tryReadJson } from "./util.ts";
 import { focusPath, manifestPath } from "./git.ts";
 
 /**
@@ -15,7 +15,7 @@ function readOrDie(p: string, label: string): string {
   try {
     return readFileSync(p, "utf8");
   } catch (e) {
-    die(`chapter-review: cannot read ${label} (${p}): ${(e as Error).message}`);
+    die(`chapter-review: cannot read ${label} (${p}): ${errorMessage(e)}`);
   }
 }
 
@@ -30,21 +30,40 @@ function printJsonOrDie(text: string, p: string, label: string): void {
   try {
     JSON.parse(text);
   } catch (e) {
-    die(`chapter-review: ${label} is not valid JSON (${p}): ${(e as Error).message}`);
+    die(`chapter-review: ${label} is not valid JSON (${p}): ${errorMessage(e)}`);
   }
   process.stdout.write(text);
 }
+
+const NO_FOCUS = "No focus yet; the reviewer hasn't selected anything in the extension.";
 
 /** Print the reviewer's current focus pointer, or a note when nothing is selected. */
 export function cmdFocus(): void {
   const p = focusPath();
   if (!existsSync(p)) {
-    console.log(
-      "No focus yet; the reviewer hasn't selected anything in the extension."
-    );
+    console.log(NO_FOCUS);
     return;
   }
-  printJsonOrDie(readOrDie(p, "the focus pointer"), p, "the focus pointer");
+  const text = readOrDie(p, "the focus pointer");
+  // An empty file means the same thing as no file: nothing is selected. Erroring
+  // on one and not the other made an agent handle two spellings of "no focus".
+  if (text.trim() === "") {
+    console.log(NO_FOCUS);
+    return;
+  }
+  const parsed = tryReadJson(() => text);
+  if (!parsed.ok) {
+    die(`chapter-review: the focus pointer is not valid JSON (${p}): ${parsed.error}`);
+  }
+  // Shape-checked, not just parsed: `[]` is valid JSON and was printed straight
+  // through, leaving the caller to resolve a pointer with no path in it.
+  if (!isRecord(parsed.value) || typeof parsed.value.path !== "string") {
+    die(
+      `chapter-review: the focus pointer has no "path" (${p}); ` +
+        "the extension writes it, so this file has been edited or truncated."
+    );
+  }
+  process.stdout.write(text);
 }
 
 /** Print the current manifest, or a note when none has been written for this branch. */

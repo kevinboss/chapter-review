@@ -52,7 +52,7 @@ export interface ReviewedUnit {
 /**
  * Review checkmarks. A separate document because the extension owns it and the
  * agent owns the manifest: one writer per file means neither can clobber the
- * other's edit, which is what sharing chapters.json used to allow.
+ * other's edit.
  */
 export interface Progress {
   version: number;
@@ -70,8 +70,8 @@ export interface Manifest {
   chapters: Chapter[];
   unassigned: FileEntry[];
   issues?: Issue[];
-  /** @deprecated Lives in progress.json now; still read once, to migrate it. */
-  reviewed?: ReviewedUnit[];
+  /** Highest `iss-N` ever allocated, so a removed finding's id is never reused. */
+  issueSeq?: number;
 }
 
 export interface ManifestStats {

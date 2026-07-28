@@ -3,9 +3,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import path from "node:path";
-import { SKILL_DIR } from "./helpers.ts";
+import { readJsonAs, SKILL_DIR } from "./helpers.ts";
 import { validateManifest } from "../.claude/skills/chapter-review/validate.ts";
 
 // The whole point of this suite is to feed the validator shapes it must reject,
@@ -60,9 +59,7 @@ function hunksOf(file: LooseFile): LooseHunk[] {
   return file.hunks;
 }
 
-const example = JSON.parse(
-  readFileSync(path.join(SKILL_DIR, "example-chapters.json"), "utf8")
-) as LooseManifest;
+const example = readJsonAs<LooseManifest>(path.join(SKILL_DIR, "example-chapters.json"));
 
 interface Case {
   name: string;
@@ -73,7 +70,7 @@ interface Case {
 
 const cases: Case[] = [
   { name: "example manifest is valid", mutate: () => { /* unmutated */ }, expectError: null },
-  { name: "missing mergeBase", mutate: (m) => delete m.mergeBase, expectError: "schema:" },
+  { name: "missing mergeBase", mutate: (m) => (m.mergeBase = undefined), expectError: "schema:" },
   { name: "unknown file status", mutate: (m) => (m.chapters[0].files[0].status = "changed"), expectError: "schema:" },
   {
     name: "identical hunk claimed twice",
@@ -94,21 +91,13 @@ const cases: Case[] = [
   { name: "oldPath without renamed status", mutate: (m) => (m.chapters[0].files[0].oldPath = "src/old.ts"), expectError: "oldPath" },
   { name: "duplicate chapter id", mutate: (m) => (m.chapters[1].id = "ch-1"), expectError: "duplicate chapter id" },
   { name: "issue with unknown severity", mutate: (m) => (m.issues[0].severity = "blocker"), expectError: "schema:" },
-  { name: "issue missing note", mutate: (m) => delete m.issues[0].note, expectError: "note" },
+  { name: "issue missing note", mutate: (m) => (m.issues[0].note = undefined), expectError: "note" },
   { name: "issue with unknown confidence", mutate: (m) => (m.issues[0].confidence = "maybe"), expectError: "confidence" },
-  { name: "issue confidence omitted is valid", mutate: (m) => delete m.issues[0].confidence, expectError: null },
+  { name: "issue confidence omitted is valid", mutate: (m) => (m.issues[0].confidence = undefined), expectError: null },
   { name: "duplicate issue id", mutate: (m) => m.issues.push({ ...m.issues[0] }), expectError: "duplicate issue id" },
   { name: "issue with unknown field", mutate: (m) => (m.issues[0].author = "me"), expectError: "unknown property" },
-  { name: "reviewed unit is valid", mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "abcd1234" }]), expectError: null },
-  {
-    name: "reviewed unit with a hunk is valid",
-    mutate: (m) => (m.reviewed = [{ path: "src/server.ts", hunk: { oldStart: 30, oldLines: 0, newStart: 30, newLines: 24 }, digest: "0a1b" }]),
-    expectError: null,
-  },
-  { name: "reviewed unit with a non-hex digest", mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "NOPE" }]), expectError: "digest" },
-  { name: "reviewed unit missing digest", mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts" }]), expectError: "digest" },
-  { name: "reviewed unit with unknown field", mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "ab", extra: 1 }]), expectError: "unknown property" },
-  { name: "reviewed must be an array", mutate: (m) => (m.reviewed = {}), expectError: "reviewed" },
+  // Checkmarks live in progress.json alone; the manifest has no `reviewed` key.
+  { name: "reviewed in the manifest is rejected", mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "abcd1234" }]), expectError: "unknown property" },
 ];
 
 for (const c of cases) {

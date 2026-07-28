@@ -1,14 +1,18 @@
 import { die } from "./util.ts";
+import { branchDiff, parseDiff } from "./diff.ts";
 import { issueFieldsFromFlags, parseFlags } from "./flags.ts";
 import {
-  hunksOverlap,
+  allEntries,
+  hunkEquals,
   installManifest,
+  issueHighWater,
   nextIssueId,
   ownerChapterId,
+  pathInManifest,
   readManifestOrDie,
   withIssues,
 } from "./manifest.ts";
-import type { Issue, Manifest, ManifestStats } from "./types.ts";
+import type { Hunk, Issue, Manifest, ManifestStats } from "./types.ts";
 
 /**
  * Reject a --chapter naming a chapter the manifest does not have. The id format
@@ -28,6 +32,89 @@ function requireRealChapter(manifest: Manifest, chapterId: string | undefined): 
   );
 }
 
+/**
+ * Reject a --path the manifest does not hold, in a chapter or in unassigned.
+ * Such a finding lands with no chapterId, which is indistinguishable from a
+ * legitimately quarantined path, so a typo reads as intentional.
+ */
+function requireRealPath(manifest: Manifest, p: string | undefined): void {
+  if (p === undefined) return;
+  if (pathInManifest(manifest, p)) return;
+  die(
+    `chapter-review: "${p}" is not in the current manifest, so a finding on it ` +
+      "would anchor to nothing.\n" +
+      "  Check the spelling, or use the path as the diff records it " +
+      "(repo-relative, forward slashes). `chapter-review show` lists them."
+  );
+}
+
+/**
+ * Reject an --old-path that disagrees with the rename the partition records.
+ * The value was stored unchecked, so a typo'd or invented origin sat in the
+ * finding looking like the file's history, and the manifest right beside it
+ * says otherwise.
+ */
+function requireRealOldPath(
+  manifest: Manifest,
+  p: string | undefined,
+  oldPath: string | undefined
+): void {
+  if (oldPath === undefined || p === undefined) return;
+  const recorded = allEntries(manifest)
+    .filter((f) => f.path === p)
+    .map((f) => f.oldPath)
+    .find((o) => o !== undefined);
+  if (recorded === oldPath) return;
+  die(
+    recorded === undefined
+      ? `chapter-review: ${p} is not recorded as renamed, so --old-path does not apply.`
+      : `chapter-review: ${p} was renamed from "${recorded}", not "${oldPath}".`
+  );
+}
+
+const rangeList = (hs: Hunk[]): string =>
+  hs.map((h) => `-${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines}`).join("  ");
+
+/**
+ * Reject a --hunk pinning the finding to a range that does not exist. The range
+ * is stored as the anchor, so a typo'd one sends the extension to lines the diff
+ * does not have.
+ *
+ * Which ranges are legal depends on how the path is claimed. A hunk-split path
+ * must name one of the partition's own ranges. A path claimed whole has no such
+ * ranges, but its file still has hunks in the diff, and pinning to one is the
+ * only way two findings about different parts of that file stay distinguishable
+ * — so those are checked against the diff instead.
+ */
+function requireRealHunk(manifest: Manifest, p: string, hunk: Hunk | undefined): void {
+  if (hunk === undefined) return;
+  const claimed = allEntries(manifest)
+    .filter((f) => f.path === p)
+    .flatMap((f) => f.hunks ?? []);
+  // Equality, not overlap, in both cases. Overlap let a wildly wrong range
+  // through, since `1,999999999,1,999999999` touches every hunk in the file.
+  if (claimed.length > 0) {
+    if (!claimed.some((h) => hunkEquals(h, hunk))) {
+      die(
+        `chapter-review: --hunk is not a range claimed for ${p}.\n` +
+          `  claimed: ${rangeList(claimed)}\n  Pass one of these exactly; a finding pins to a hunk the partition owns.`
+      );
+    }
+    return;
+  }
+  const diffText = branchDiff(manifest.mergeBase);
+  // Unreadable diff: accept rather than block, as the coverage check does.
+  if (diffText === undefined) return;
+  const real = parseDiff(diffText).find((f) => f.path === p)?.hunks ?? [];
+  if (!real.some((h) => hunkEquals(h, hunk))) {
+    die(
+      `chapter-review: --hunk is not a hunk of ${p} in this diff.\n` +
+        `  hunks: ${rangeList(real)}\n` +
+        "  Pass one exactly, or drop --hunk to anchor the finding to the whole file."
+    );
+  }
+}
+
 function findIssue(manifest: Manifest, id: string): { issues: Issue[]; issue: Issue } {
   const issues = Array.isArray(manifest.issues) ? manifest.issues : [];
   const issue = issues.find((i) => i.id === id);
@@ -43,11 +130,45 @@ function saveIssues(
   installManifest(withIssues(manifest, issues), onOk);
 }
 
+/** Per-subcommand usage. The top-level help lists `add`'s flags only. */
+function issueUsage(code: number): never {
+  const out = code === 0 ? console.log : console.error;
+  out(
+    [
+      "usage: chapter-review issue <subcommand>",
+      "",
+      "  add    <flags>       record a finding (--path --severity --note required)",
+      "  set    <id> <flags>  revise a finding; takes the same flags as `add`",
+      "  resolve <id>         mark a finding resolved",
+      "  reopen  <id>         reopen a resolved finding",
+      "  verify  <id>         mark the premise confirmed outside the diff",
+      "  unverify <id>        mark the premise unchecked (suspected)",
+      "  rm     <id>          drop a finding; its id is retired, not reused",
+      "  list                 list findings",
+      "",
+      "flags for add and set:",
+      "  --path P             file the finding is about; must be in the diff",
+      "  --old-path P         pre-rename path, for a renamed file",
+      "  --severity S         critical | high | low",
+      "  --note \"…\"           one line: what is wrong",
+      "  --confidence C       suspected (default) | verified",
+      "  --chapter ch-N       owning chapter; inferred from --path when omitted",
+      "  --hunk o,ol,n,nl     oldStart,oldLines,newStart,newLines; pins the finding",
+      "                       to that range, and picks the owner on a split path",
+      "  --status S           open | resolved",
+    ].join("\n")
+  );
+  process.exit(code);
+}
+
 /**
  * Dispatch an `issue` subcommand (add, set, resolve, reopen, verify, unverify,
  * rm, list) against the current manifest.
  */
 export function cmdIssue(sub: string | undefined, rest: string[]): void {
+  // Before readManifestOrDie: the flags are worth reading in a repo that has no
+  // review yet.
+  if (sub === "help" || sub === "--help" || sub === "-h") issueUsage(0);
   const manifest = readManifestOrDie();
   const issues = Array.isArray(manifest.issues) ? manifest.issues : [];
 
@@ -73,7 +194,26 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       // The loop above exits the process unless all three are set.
       const { path: fieldPath } = fields;
       if (fieldPath === undefined) return;
-      const id = nextIssueId(issues);
+      requireRealPath(manifest, fieldPath);
+      requireRealOldPath(manifest, fieldPath, fields.oldPath);
+      requireRealHunk(manifest, fieldPath, fields.hunk);
+      // Warned, not refused: re-running a command is the usual cause, but two
+      // findings can legitimately share a path and note if a reviewer wants them
+      // tracked separately, so the caller decides.
+      // hunkEquals is false when either side is absent, which is exactly the
+      // case for two whole-file findings on the same path: they share an anchor.
+      const sameAnchor = (a?: Hunk, b?: Hunk): boolean =>
+        (a === undefined && b === undefined) || hunkEquals(a, b);
+      const twin = issues.find(
+        (i) => i.path === fieldPath && i.note === fields.note && sameAnchor(i.hunk, fields.hunk)
+      );
+      if (twin) {
+        console.error(
+          `chapter-review: ${twin.id} already says this about ${fieldPath}; ` +
+            "adding a second finding. `issue rm` one of them if that was a re-run."
+        );
+      }
+      const id = nextIssueId(manifest, issues);
       // Infer the owning chapter from the path when not given. A --hunk picks
       // the chapter that owns that range; on an ambiguous split (path in >1
       // chapter, no hunk to match) we pick the first and say so.
@@ -83,31 +223,32 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         );
         const inferred = ownerChapterId(manifest, fieldPath, fields.hunk, undefined);
         if (inferred) fields.chapterId = inferred;
-        // Warn whenever the owner had to be guessed: no --hunk on a split path,
-        // or a --hunk that overlaps none of the owning ranges (a typo'd range
-        // would otherwise land the finding in the wrong chapter silently).
-        if (owners.length > 1) {
-          const { hunk } = fields;
-          const hunkMatched =
-            hunk !== undefined &&
-            owners.some((ch) =>
-              ch.files.some(
-                (f) =>
-                  f.path === fieldPath &&
-                  f.hunks?.some((h) => hunksOverlap(h, hunk))
-              )
-            );
-          if (!hunkMatched) {
-            console.error(
-              `chapter-review: ${fields.path} spans ${owners.map((o) => o.id).join(", ")}; ` +
-                `recorded in ${inferred}. ` +
-                (fields.hunk ? "The --hunk matched no owning range; " : "") +
-                `pass --chapter to choose, or --hunk to match by range.`
-            );
-          }
+        // Warn when the owner had to be guessed. requireRealHunk has already
+        // rejected a range that matches nothing, so the only guess left is a
+        // split path with no --hunk to choose by.
+        if (owners.length > 1 && fields.hunk === undefined) {
+          console.error(
+            `chapter-review: ${fields.path} spans ${owners.map((o) => o.id).join(", ")}; ` +
+              `recorded in ${inferred} and anchored to the whole file. ` +
+              `pass --chapter to choose, or --hunk to pin a range.`
+          );
         }
       }
-      const issue = { id, ...fields } as Issue;
+      // Re-stated from the narrowed locals rather than asserted: the loop above
+      // already exited unless all three are set, but only these bindings say so
+      // in a way the compiler can check.
+      const { severity, note } = fields;
+      if (severity === undefined || note === undefined) return;
+      const issue: Issue = {
+        id,
+        ...fields,
+        path: fieldPath,
+        severity,
+        note,
+        // Stamped here because nothing else ever sets it: the field was in the
+        // schema, carried across regeneration, and always absent.
+        createdAt: new Date().toISOString(),
+      };
       const confidence = issue.confidence === "verified" ? "verified" : "suspected";
       saveIssues(manifest, [...issues, issue], () =>
         { console.log(`Added ${id} (${issue.severity}, ${confidence}) on ${issue.path}${issue.chapterId ? ` in ${issue.chapterId}` : ""}.`); }
@@ -129,8 +270,24 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         "hunk",
       ]);
       const updates = issueFieldsFromFlags(flags);
+      // Otherwise it reports "Updated iss-N." having changed nothing.
+      if (Object.keys(updates).length === 0) {
+        die(
+          `chapter-review: issue set ${id} needs at least one field to change.\n` +
+            "  --path --old-path --note --severity --confidence --chapter --hunk --status"
+        );
+      }
       requireRealChapter(manifest, updates.chapterId);
+      requireRealPath(manifest, updates.path);
+      requireRealOldPath(manifest, updates.path ?? issue.path, updates.oldPath);
+      // A range belongs to the file it was read from. Moving the finding to
+      // another path used to keep the old coordinates, pinning it to lines the
+      // new file may not even have; canonicalIssue drops the undefined key.
+      const droppedHunk =
+        updates.path !== undefined && updates.hunk === undefined && issue.hunk !== undefined;
       Object.assign(issue, updates);
+      if (droppedHunk) issue.hunk = undefined;
+      requireRealHunk(manifest, issue.path, issue.hunk);
       // Re-anchoring a finding must re-home it: `add` infers the owning chapter
       // from --path/--hunk, so `set` has to as well. Without this, moving a
       // finding to a path or range another chapter owns leaves it filed under
@@ -139,11 +296,22 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       // explicit --chapter in the same call still wins.
       const reanchored = updates.path !== undefined || updates.hunk !== undefined;
       if (reanchored && updates.chapterId === undefined) {
-        const owner = ownerChapterId(manifest, issue.path, issue.hunk, undefined);
-        if (owner) issue.chapterId = owner;
-        else delete issue.chapterId;
+        // Undefined rather than removed: canonicalIssue drops the key on save.
+        issue.chapterId = ownerChapterId(manifest, issue.path, issue.hunk, undefined);
       }
-      saveIssues(manifest, issues, () => { console.log(`Updated ${id}.`); });
+      saveIssues(manifest, issues, () => {
+        // Name the state the move discarded. Silently dropping the range left
+        // the finding anchored to a whole file with no sign it had been pinned,
+        // and its note still describing the code it came from.
+        const where = issue.chapterId ? ` in ${issue.chapterId}` : "";
+        const moved = updates.path !== undefined;
+        console.log(
+          `Updated ${id}${where}.` +
+            (droppedHunk ? " Its hunk was cleared: a range does not carry to another file." : "") +
+            // The note was written about the old anchor and nothing rewrites it.
+            (moved ? " Check the note still describes the new path." : "")
+        );
+      });
       break;
     }
     case "resolve":
@@ -172,8 +340,10 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       const [id] = rest;
       if (!id) die("chapter-review: issue rm needs an issue id.");
       findIssue(manifest, id); // errors if missing
+      // Pinned before the removal, so dropping the highest id does not free it.
+      manifest.issueSeq = issueHighWater(manifest, issues);
       saveIssues(manifest, issues.filter((i) => i.id !== id), () =>
-        { console.log(`Removed ${id}.`); }
+        { console.log(`Removed ${id}. Its id is retired, not reused.`); }
       );
       break;
     }
@@ -185,13 +355,30 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       for (const i of issues) {
         const status = i.status === "resolved" ? "resolved" : "open";
         const confidence = i.confidence === "verified" ? "verified" : "suspected";
+        // Name the no-chapter cases: a quarantined path legitimately has no
+        // owner, a path outside the diff is a stale anchor.
+        const where = i.chapterId
+          ? ` (${i.chapterId})`
+          : pathInManifest(manifest, i.path)
+            ? " (unassigned)"
+            : " (no anchor: path is not in the diff)";
+        // The anchor is path + hunk, so show which of the two this finding got.
+        const at = i.hunk
+          ? ` @@ -${i.hunk.oldStart},${i.hunk.oldLines} +${i.hunk.newStart},${i.hunk.newLines} @@`
+          : "";
         console.log(
-          `${i.id}  [${i.severity}/${confidence}/${status}]  ${i.path}${i.chapterId ? ` (${i.chapterId})` : ""}\n    ${i.note}`
+          `${i.id}  [${i.severity}/${confidence}/${status}]  ${i.path}${at}${where}\n    ${i.note}`
         );
       }
       break;
     }
+    case "help":
+    case "--help":
+    case "-h":
+      issueUsage(0);
+      break;
     default:
-      die(`chapter-review: unknown issue command "${sub ?? ""}" (add|set|resolve|reopen|verify|unverify|rm|list)`);
+      console.error(`chapter-review: unknown issue command "${sub ?? ""}"`);
+      issueUsage(1);
   }
 }

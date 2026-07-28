@@ -29,8 +29,10 @@ function usage(code: number): never {
       "  issue reopen  <id>        reopen a finding",
       "  issue verify  <id>        mark a finding's premise verified",
       "  issue unverify <id>       mark a finding suspected (premise unchecked)",
-      "  issue rm     <id>         drop a finding",
+      "  issue rm     <id>         drop a finding (its id is retired, not reused)",
       "  issue list                list findings",
+      "",
+      "  issue --help              flags for `issue add` and `issue set`",
     ].join("\n")
   );
   process.exit(code);
