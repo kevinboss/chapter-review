@@ -20,9 +20,19 @@ const src = path.join(extDir, "..", ".claude", "skills", "chapter-review");
 const dest = path.join(extDir, "skill");
 
 rmSync(dest, { recursive: true, force: true });
-cpSync(src, dest, { recursive: true });
+// Skip the dev-only artifacts that support type-checking the source here
+// (node_modules, the @types/node lockfile, tsconfig). None are needed to run
+// the skill, and node_modules would bloat the shipped .vsix. package.json stays
+// because its "type":"module" marks the folder as ESM at runtime.
+const SKIP = new Set(["node_modules", "package-lock.json", "tsconfig.json"]);
+cpSync(src, dest, {
+  recursive: true,
+  filter: (entry) => !SKIP.has(path.basename(entry)),
+});
 
-const { version } = JSON.parse(readFileSync(path.join(extDir, "package.json"), "utf8"));
+const { version } = JSON.parse(
+  readFileSync(path.join(extDir, "package.json"), "utf8")
+) as { version: string };
 const skillMd = path.join(dest, "SKILL.md");
 writeFileSync(skillMd, stampVersion(readFileSync(skillMd, "utf8"), version));
 
@@ -30,14 +40,14 @@ writeFileSync(skillMd, stampVersion(readFileSync(skillMd, "utf8"), version));
 // existing version line, else adds it under an existing `metadata:` block, else
 // inserts a fresh `metadata:` block at the end of the frontmatter. Kept under
 // `metadata:` because the agent-skill schema rejects a top-level `version` key.
-function stampVersion(text, version) {
+function stampVersion(text: string, version: string): string {
   if (/^\s*version:\s*.*$/m.test(text)) {
     return text.replace(/^(\s*version:\s*).*$/m, `$1${version}`);
   }
   if (/^metadata:\s*$/m.test(text)) {
     return text.replace(/^metadata:\s*$/m, `metadata:\n  version: ${version}`);
   }
-  const fm = text.match(/^(---\n[\s\S]*?\n)(---\n)/);
+  const fm = /^(---\n[\s\S]*?\n)(---\n)/.exec(text);
   if (!fm) {
     throw new Error("bundle-skill: SKILL.md has no YAML frontmatter to stamp");
   }

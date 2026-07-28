@@ -3,8 +3,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "validate": "node .claude/skills/chapter-review/validate.mjs",
-    "demo": "node scripts/make-demo.mjs",
-    "test": "node scripts/test.mjs && node .claude/skills/chapter-review/validate.mjs .claude/skills/chapter-review/example-chapters.json"
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p .claude/skills/chapter-review/tsconfig.json --noEmit && tsc -p extension/scripts/tsconfig.json --noEmit && tsc -p extension/tsconfig.json --noEmit",
+    "validate": "node .claude/skills/chapter-review/validate.ts",
+    "demo": "node scripts/make-demo.ts",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.1",
+    "eslint": "^10.8.0",
+    "jiti": "^2.7.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0"
   }
 }

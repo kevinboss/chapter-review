@@ -39,8 +39,8 @@ export class DiffViewer {
     const entry = m.chapters
       .find((c) => c.id === issue.chapterId)
       ?.files.find((f) => f.path === issue.path);
-    if (entry) {
-      await this.openEntry(issue.chapterId!, entry, focusHunkFor(issue, entry));
+    if (entry && issue.chapterId !== undefined) {
+      await this.openEntry(issue.chapterId, entry, focusHunkFor(issue, entry));
     } else {
       await this.openWorkingFile(issue);
     }
@@ -123,13 +123,14 @@ function focusHunkFor(issue: Issue, entry: Entry): Hunk | undefined {
   if (!issue.hunk) {
     return undefined;
   }
+  const { hunk } = issue;
   return (
     entry.hunks?.find(
       (h) =>
-        h.oldStart === issue.hunk!.oldStart &&
-        h.oldLines === issue.hunk!.oldLines &&
-        h.newStart === issue.hunk!.newStart &&
-        h.newLines === issue.hunk!.newLines
-    ) ?? issue.hunk
+        h.oldStart === hunk.oldStart &&
+        h.oldLines === hunk.oldLines &&
+        h.newStart === hunk.newStart &&
+        h.newLines === hunk.newLines
+    ) ?? hunk
   );
 }
