@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    // Dev-only: type-checks the CLI source and is excluded from both the bundled
+    // skill and the release zip, so nothing here reaches a consumer. Options match
+    // the root tsconfig.json, which explains why each was chosen.
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "moduleDetection": "force",
+    "types": ["node"],
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["*.ts"]
+}
