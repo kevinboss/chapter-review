@@ -183,9 +183,10 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p .",
-    "watch": "tsc -w -p .",
-    "bundle-skill": "node scripts/bundle-skill.mjs",
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
+    "compile": "npm run clean && tsc -p .",
+    "watch": "npm run clean && tsc -w -p .",
+    "bundle-skill": "node scripts/bundle-skill.mts",
     "build": "npm run compile && npm run bundle-skill",
     "vscode:prepublish": "npm run build",
     "package": "vsce package --no-dependencies"
