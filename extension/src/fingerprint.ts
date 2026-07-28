@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { gitShow } from "./gitContent";
+import { gitShow } from "./git";
 import { allEntries, Manifest, reviewKey } from "./model";
 
 /** Current content digest per review key (model.reviewKey), for one manifest. */

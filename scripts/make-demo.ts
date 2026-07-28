@@ -101,6 +101,33 @@ if (!process.argv.includes("--manifest")) {
 
 // --- parse the real diff ----------------------------------------------------
 
+// A hunk header's count is omitted when it is 1 (`@@ -3 +3,2 @@`).
+const hunkCount = (v: string | undefined): number => (v === undefined ? 1 : Number(v));
+
+/** Status and path for one diff section, from its header lines. */
+function classifyFile(
+  header: string[],
+  aPath: string,
+  bPath: string
+): { path: string; oldPath: string | undefined; status: FileStatus } {
+  if (header.some((l) => l.startsWith("new file"))) {
+    return { path: bPath, oldPath: undefined, status: "added" };
+  }
+  if (header.some((l) => l.startsWith("deleted file"))) {
+    return { path: aPath, oldPath: undefined, status: "deleted" };
+  }
+  const from = header.find((l) => l.startsWith("rename from "));
+  const to = header.find((l) => l.startsWith("rename to "));
+  if (from !== undefined && to !== undefined) {
+    return {
+      path: to.slice("rename to ".length),
+      oldPath: from.slice("rename from ".length),
+      status: "renamed",
+    };
+  }
+  return { path: bPath, oldPath: undefined, status: "modified" };
+}
+
 function parseDiff(text: string): ParsedFile[] {
   return text
     .split(/^diff --git /m)
@@ -109,45 +136,25 @@ function parseDiff(text: string): ParsedFile[] {
       const lines = section.split("\n");
       const paths = /^a\/(\S+) b\/(\S+)$/.exec(lines[0]);
       if (!paths) throw new Error(`unparsable diff header: ${lines[0]}`);
-      let filePath = paths[2];
-      let oldPath: string | undefined;
-      let status: FileStatus = "modified";
-
       const firstHunk = lines.findIndex((l) => l.startsWith("@@"));
       const header = lines.slice(0, firstHunk === -1 ? lines.length : firstHunk);
-      if (header.some((l) => l.startsWith("new file"))) {
-        status = "added";
-      } else if (header.some((l) => l.startsWith("deleted file"))) {
-        status = "deleted";
-        filePath = paths[1];
-      } else {
-        const from = header.find((l) => l.startsWith("rename from "));
-        const to = header.find((l) => l.startsWith("rename to "));
-        if (from && to) {
-          status = "renamed";
-          oldPath = from.slice("rename from ".length);
-          filePath = to.slice("rename to ".length);
-        }
-      }
+      const { path: filePath, oldPath, status } = classifyFile(header, paths[1], paths[2]);
 
+      // Each +/- line belongs to the hunk header above it, so append to the last
+      // one pushed rather than tracking a "current" cursor.
       const hunks: ParsedHunk[] = [];
-      if (firstHunk !== -1) {
-        let current: ParsedHunk | null = null;
-        for (const line of lines.slice(firstHunk)) {
-          const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
-          if (h) {
-            const count = (v: string | undefined): number => (v === undefined ? 1 : Number(v));
-            current = {
-              oldStart: Number(h[1]),
-              oldLines: count(h.at(2)),
-              newStart: Number(h[3]),
-              newLines: count(h.at(4)),
-              changed: [],
-            };
-            hunks.push(current);
-          } else if (current && /^[+-]/.test(line)) {
-            current.changed.push(line);
-          }
+      for (const line of firstHunk === -1 ? [] : lines.slice(firstHunk)) {
+        const h = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+        if (h) {
+          hunks.push({
+            oldStart: Number(h[1]),
+            oldLines: hunkCount(h.at(2)),
+            newStart: Number(h[3]),
+            newLines: hunkCount(h.at(4)),
+            changed: [],
+          });
+        } else if (hunks.length > 0 && /^[+-]/.test(line)) {
+          hunks[hunks.length - 1].changed.push(line);
         }
       }
       return { path: filePath, oldPath, status, hunks };
@@ -204,22 +211,18 @@ function ownersFor(file: ParsedFile): (hunk: ParsedHunk) => string {
 
 // owner -> path -> { file, hunks }
 const assignments = new Map<string, Map<string, Entry>>();
-let parsedHunks = 0;
-for (const file of files) {
+const parsedHunks = files.reduce((total, file) => {
   const owner = ownersFor(file);
   for (const hunk of file.hunks) {
-    parsedHunks++;
     const key = owner(hunk);
-    let perPath = assignments.get(key);
-    if (!perPath) {
-      perPath = new Map<string, Entry>();
-      assignments.set(key, perPath);
-    }
-    let entry = perPath.get(file.path);
-    if (!entry) perPath.set(file.path, (entry = { file, hunks: [] }));
+    const perPath = assignments.get(key) ?? new Map<string, Entry>();
+    assignments.set(key, perPath);
+    const entry = perPath.get(file.path) ?? { file, hunks: [] };
+    perPath.set(file.path, entry);
     entry.hunks.push(hunk);
   }
-}
+  return total + file.hunks.length;
+}, 0);
 
 // --- emit the manifest -------------------------------------------------------
 

@@ -19,16 +19,17 @@ export function applyHunks(oldText: string, newText: string, hunks: Hunk[]): Sco
   const out: string[] = [];
   const changeLines = new Map<Hunk, number>();
 
-  let cursor = 0; // 0-based index into oldLines
-  for (const h of sorted) {
+  // The fold carries the read position (0-based into oldLines) from one hunk to
+  // the next, and returns where the last one left off.
+  const cursor = sorted.reduce((read, h) => {
     // oldLines === 0 marks an insertion after line oldStart (git convention);
     // otherwise oldStart is the first replaced line.
     const start = h.oldLines === 0 ? h.oldStart : h.oldStart - 1;
-    out.push(...oldLines.slice(cursor, start));
+    out.push(...oldLines.slice(read, start));
     changeLines.set(h, out.length + firstChangeOffset(oldLines, newLines, h) + 1);
     out.push(...newLines.slice(h.newStart - 1, h.newStart - 1 + h.newLines));
-    cursor = start + h.oldLines;
-  }
+    return start + h.oldLines;
+  }, 0);
   out.push(...oldLines.slice(cursor));
 
   return { text: out.join("\n"), changeLines };
@@ -38,11 +39,10 @@ export function applyHunks(oldText: string, newText: string, hunks: Hunk[]): Sco
 // lines that are identical on both sides.
 function firstChangeOffset(oldLines: string[], newLines: string[], h: Hunk): number {
   const shared = Math.min(h.oldLines, h.newLines);
-  for (let k = 0; k < shared; k++) {
-    if (oldLines[h.oldStart - 1 + k] !== newLines[h.newStart - 1 + k]) {
-      return k;
-    }
-  }
+  const differs = Array.from({ length: shared }, (_, k) => k).find(
+    (k) => oldLines[h.oldStart - 1 + k] !== newLines[h.newStart - 1 + k]
+  );
+  if (differs !== undefined) return differs;
   // Pure insertion or deletion after fully shared context.
   return Math.min(shared, Math.max(h.newLines - 1, 0));
 }

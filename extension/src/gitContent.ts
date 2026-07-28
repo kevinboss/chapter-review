@@ -1,58 +1,12 @@
-import { execFile } from "node:child_process";
 import * as vscode from "vscode";
+import { gitShow } from "./git";
 
 export const GIT_SCHEME = "chapter-review-git";
 export const PATCHED_SCHEME = "chapter-review-patched";
 
-/** Absolute git dir of the repo at cwd (worktree-safe); undefined if not a repo. */
-export function resolveGitDir(cwd: string): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    execFile(
-      "git",
-      ["rev-parse", "--absolute-git-dir"],
-      { cwd },
-      (err, stdout) => { resolve(err ? undefined : stdout.trim()); }
-    );
-  });
-}
-
-/** `git show <ref>:<path>`; empty ref or a missing file yields "". */
-export function gitShow(repoRoot: string, ref: string, path: string): Promise<string> {
-  if (!ref) {
-    return Promise.resolve("");
-  }
-  return new Promise((resolve) => {
-    execFile(
-      "git",
-      ["show", `${ref}:${path}`],
-      { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 },
-      // File absent at ref (e.g. stale manifest): empty side beats an error.
-      (err, stdout) => { resolve(err ? "" : stdout); }
-    );
-  });
-}
-
-/** `git rev-parse <ref>` → full SHA, or undefined if it can't be resolved. */
-export function gitRevParse(repoRoot: string, ref: string): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    execFile("git", ["rev-parse", ref], { cwd: repoRoot }, (err, stdout) =>
-      { resolve(err ? undefined : stdout.trim() || undefined); }
-    );
-  });
-}
-
-/** `git merge-base <a> <b>` → SHA, or undefined if there is no common ancestor. */
-export function gitMergeBase(
-  repoRoot: string,
-  a: string,
-  b: string
-): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    execFile("git", ["merge-base", a, b], { cwd: repoRoot }, (err, stdout) =>
-      { resolve(err ? undefined : stdout.trim() || undefined); }
-    );
-  });
-}
+// The git queries themselves live in ./git, which imports no vscode API. Re-
+// exported here so existing importers keep working.
+export { resolveGitDir, gitShow, gitRevParse, gitMergeBase } from "./git";
 
 /**
  * Serves file content at a fixed ref, so diffs against the merge base need no
@@ -64,8 +18,31 @@ export class GitContentProvider implements vscode.TextDocumentContentProvider {
   constructor(private readonly repoRoot: string) {}
 
   provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
-    const { ref, path } = JSON.parse(uri.query) as { ref: string; path: string };
-    return gitShow(this.repoRoot, ref, path);
+    const q = parseQuery(uri.query);
+    if (!q) {
+      return Promise.resolve("");
+    }
+    return gitShow(this.repoRoot, q.ref, q.path);
+  }
+}
+
+/** The {ref, path} a review URI carries in its query, when it is well-formed. */
+function parseQuery(query: string): { ref: string; path: string } | undefined {
+  try {
+    const q: unknown = JSON.parse(query);
+    if (
+      typeof q === "object" &&
+      q !== null &&
+      "ref" in q &&
+      "path" in q &&
+      typeof q.ref === "string" &&
+      typeof q.path === "string"
+    ) {
+      return { ref: q.ref, path: q.path };
+    }
+    return undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -84,11 +61,7 @@ export function gitUri(ref: string, path: string): vscode.Uri {
  */
 export function reviewUriPath(uri: vscode.Uri): string | undefined {
   if (uri.scheme === GIT_SCHEME) {
-    try {
-      return (JSON.parse(uri.query) as { path: string }).path;
-    } catch {
-      return undefined;
-    }
+    return parseQuery(uri.query)?.path;
   }
   if (uri.scheme === PATCHED_SCHEME) {
     // path is /<ownerId>/<relPath>; ownerId never contains a slash.
