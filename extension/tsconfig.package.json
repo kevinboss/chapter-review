@@ -1,0 +1,9 @@
+// Packaging build: no source maps, because .vscodeignore keeps *.map out of the
+// .vsix. `npm run build` still emits them, but packaging overwrites out/ without
+// them, so re-run it before debugging the dev host after a package.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "sourceMap": false
+  }
+}

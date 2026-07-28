@@ -185,16 +185,23 @@
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
     "compile": "npm run clean && tsc -p .",
+    "compile:package": "npm run clean && tsc -p tsconfig.package.json",
     "watch": "npm run clean && tsc -w -p .",
     "bundle-skill": "node scripts/bundle-skill.mts",
     "build": "npm run compile && npm run bundle-skill",
-    "vscode:prepublish": "npm run build",
+    "test": "npm run compile && cd out/test/unit && node --test",
+    "test:host": "npm run build && vscode-test",
+    "vscode:prepublish": "npm run compile:package && npm run bundle-skill",
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.2.0",
+    "mocha": "^10.8.2",
     "typescript": "^5.5.0"
   }
 }
