@@ -64,6 +64,13 @@ jobs:
       - run: npm ci
       - name: Type-check and compile
         run: npm run compile
+      - name: Extension unit tests (no editor needed)
+        run: npm test
+      # The tree provider and activation need the real vscode API, so these run
+      # inside a downloaded VS Code. It is an Electron app with no headless mode,
+      # hence xvfb; on Windows the same command opens a window for a few seconds.
+      - name: Extension host tests (real VS Code under xvfb)
+        run: xvfb-run -a npm run test:host
       - name: Package .vsix (build verification)
         run: npm run package
       - name: The .vsix must ship a runnable skill
@@ -75,7 +82,7 @@ jobs:
         # the real package contents, then run what it would install.
         run: |
           npx vsce ls --no-dependencies > /tmp/vsix-files.txt
-          for f in main.ts validate.ts cmd-write.ts manifest.ts git.ts flags.ts util.ts types.ts chapter-review package.json; do
+          for f in main.ts validate.ts cmd-write.ts manifest.ts diff.ts git.ts flags.ts util.ts types.ts chapter-review package.json; do
             grep -qx "skill/$f" /tmp/vsix-files.txt || { echo "MISSING from .vsix: skill/$f"; exit 1; }
           done
           rm -rf /tmp/vsix-skill && mkdir -p /tmp/vsix-skill
