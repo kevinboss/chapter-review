@@ -36,6 +36,18 @@
           ]
         }
       ]
+    },
+    {
+      "id": "ch-3",
+      "title": "Rename SessionStore to TokenStore",
+      "description": "Renamed for what it holds now that sessions are gone; call-sites travel with their own chapters.",
+      "files": [
+        {
+          "path": "src/auth/tokenStore.ts",
+          "oldPath": "src/auth/sessionStore.ts",
+          "status": "renamed"
+        }
+      ]
     }
   ],
   "unassigned": [
