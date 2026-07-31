@@ -21,7 +21,8 @@ function usage(code: number): never {
       "  focus                     print what the reviewer is looking at",
       "  show                      print the current manifest",
       "  base-check [base]         report whether the review base is fresh (read-only)",
-      "  write [file]              validate a partition draft, then install it (stdin if no file)",
+      "  write [file] [--dry-run]  validate a partition draft, then install it (stdin if no file)",
+      "                            --dry-run reports the counts and changes nothing",
       "  uncheck <flags>           clear a review checkmark (--path [--hunk]) so it re-reads",
       "  issue add    <flags>      record a finding (--path --severity --note [--confidence --chapter --hunk --old-path])",
       "  issue set    <id> <flags> revise a finding",
@@ -51,7 +52,7 @@ export function main(argv: string[]): void {
       cmdBaseCheck(rest[0]);
       break;
     case "write":
-      cmdWrite(rest[0]);
+      cmdWrite(rest);
       break;
     case "uncheck":
       cmdUncheck(rest);
