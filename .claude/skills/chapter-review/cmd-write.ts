@@ -13,7 +13,7 @@ import {
 } from "./manifest.ts";
 import { isManifest, validateManifest } from "./validate.ts";
 import { branchDiff, coverageErrors } from "./diff.ts";
-import type { Issue, Manifest, ReviewedUnit } from "./types.ts";
+import type { Issue, Manifest, ManifestStats, ReviewedUnit } from "./types.ts";
 
 /** A draft as it arrives from outside: a JSON object whose shape is unverified. */
 type Draft = Record<string, unknown>;
@@ -188,10 +188,35 @@ function assertDraftBelongsHere(draft: Draft): void {
 }
 
 /**
+ * Split `write`'s argv into its optional draft path and the --dry-run switch.
+ * Strict: treating a mistyped `--dry-runn` as a filename would install the draft
+ * it was meant to hold back.
+ */
+function parseWriteArgs(argv: string[]): { file?: string; dryRun: boolean } {
+  const out: { file?: string; dryRun: boolean } = { dryRun: false };
+  for (const tok of argv) {
+    if (tok === "--dry-run") {
+      out.dryRun = true;
+    } else if (tok.startsWith("--")) {
+      die(`chapter-review: unknown flag "${tok}" (write takes [file] [--dry-run])`);
+    } else if (out.file === undefined) {
+      out.file = tok;
+    } else {
+      die(`chapter-review: write takes one draft path (got "${out.file}" and "${tok}")`);
+    }
+  }
+  return out;
+}
+
+/**
  * Install a partition draft (from a file or stdin): re-pin it to the working
  * tree, carry findings and checkmarks forward, validate, then write.
+ *
+ * With `--dry-run` every check runs and the same report prints, but nothing is
+ * written — so the claim and carry counts can be seen before they land.
  */
-export function cmdWrite(arg?: string): void {
+export function cmdWrite(argv: string[] = []): void {
+  const { file: arg, dryRun } = parseWriteArgs(argv);
   const src: string | number = arg ?? 0; // fd 0 = stdin
   const parsed = tryReadJson(() => readFileSync(src, "utf8"));
   if (!parsed.ok) {
@@ -236,8 +261,8 @@ export function cmdWrite(arg?: string): void {
     for (const e of draftCheck.errors) console.error(`  - ${e}`);
     process.exit(1);
   }
-  assertCoversDiff(draft);
-  installDraft(draft, repinned);
+  const coverage = assertCoversDiff(draft);
+  installDraft(draft, repinned, dryRun, coverage);
 }
 
 /**
@@ -247,16 +272,18 @@ export function cmdWrite(arg?: string): void {
  * the tree, which is the failure worth a git call to prevent.
  *
  * Skipped, with a warning, when git cannot produce the diff: a coverage check
- * that cannot run must not block a write that is otherwise valid.
+ * that cannot run must not block a write that is otherwise valid. Returns whether
+ * the check actually ran, so a --dry-run can say which of the two happened rather
+ * than leaving the caller to read silence as success.
  */
-function assertCoversDiff(manifest: Manifest): void {
+function assertCoversDiff(manifest: Manifest): boolean {
   const diffText = branchDiff(manifest.mergeBase);
   if (diffText === undefined) {
     console.error(
       "chapter-review: could not read the diff, so coverage was not checked; " +
         "verify yourself that every hunk is claimed."
     );
-    return;
+    return false;
   }
   // Nothing to review is not a review. A branch level with its base produces an
   // empty partition that is technically valid, and installing it replaced a real
@@ -270,7 +297,7 @@ function assertCoversDiff(manifest: Manifest): void {
     );
   }
   const errors = coverageErrors(manifest, diffText);
-  if (errors.length === 0) return;
+  if (errors.length === 0) return true;
   console.error("chapter-review: change refused, the partition does not match the diff:");
   for (const e of errors) console.error(`  - ${e}`);
   console.error(
@@ -280,7 +307,12 @@ function assertCoversDiff(manifest: Manifest): void {
 }
 
 /** The read-modify-write half of `write`, run under the manifest lock. */
-function installDraft(asManifest: Manifest, repinned: string[]): void {
+function installDraft(
+  asManifest: Manifest,
+  repinned: string[],
+  dryRun: boolean,
+  coverageChecked: boolean
+): void {
   const priorExisted = existsSync(manifestPath());
   const { prior, fromBackup } = priorStateForCarry();
   if (priorExisted && fromBackup) {
@@ -326,7 +358,7 @@ function installDraft(asManifest: Manifest, repinned: string[]): void {
   // (which churns ids and checkmarks) is visible rather than silent.
   const priorChapterIds = new Set((prior?.chapters ?? []).map((c) => c.id));
 
-  installManifest(withIssues(asManifest, kept), (stats, dest) => {
+  const report = (stats: ManifestStats, dest: string): void => {
     const { chapters } = asManifest;
     const keptCh = chapters.filter((c) => priorChapterIds.has(c.id)).length;
     // A whole chapter disappearing was only visible by diffing two `show`s: the
@@ -347,9 +379,16 @@ function installDraft(asManifest: Manifest, repinned: string[]): void {
       reviewedGone > 0 && `${reviewedGone} checkmarks dropped (path left the diff)`,
       reviewedMerged > 0 && `${reviewedMerged} checkmarks folded into a merged hunk`,
     ].filter((c): c is string => typeof c === "string");
-    const opening = `Wrote ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
+    const opening = `${dryRun ? "Would write" : "Wrote"} ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
     console.log(`${[opening, ...clauses].join(", ")}.`);
-    console.log(`  wrote ${dest}`);
+    console.log(dryRun ? `  would write ${dest} (--dry-run: nothing changed)` : `  wrote ${dest}`);
+    // On both paths, so the dry run and the real write print the same report and
+    // a missing verdict never reads as a skipped check.
+    console.log(
+      coverageChecked
+        ? "  coverage: every hunk in the diff is claimed"
+        : "  coverage: NOT checked (the diff could not be read)"
+    );
     const { headSha, mergeBase } = asManifest;
     if (headSha) {
       console.log(`  pinned to HEAD ${short(headSha)} (mergeBase ${short(mergeBase)})`);
@@ -363,7 +402,22 @@ function installDraft(asManifest: Manifest, repinned: string[]): void {
     if (repinned.length > 0) {
       console.log(`  re-pinned ${repinned.join(", ")} to match the working tree`);
     }
-  });
+  };
+
+  const finalManifest = withIssues(asManifest, kept);
+  if (dryRun) {
+    // The validation installManifest would run, so --dry-run refuses what a real
+    // write refuses.
+    const check = validateManifest(finalManifest);
+    if (!check.ok) {
+      console.error("chapter-review: change refused, the manifest would be invalid:");
+      for (const e of check.errors) console.error(`  - ${e}`);
+      process.exit(1);
+    }
+    report(check.stats, manifestPath());
+    return;
+  }
+  installManifest(finalManifest, report);
   // After the manifest lands, so a refused install leaves progress untouched.
   if (carriedReviewed.length > 0 || priorReviewed.length > 0) {
     writeProgress(carriedReviewed);
