@@ -64,5 +64,11 @@ jobs:
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          VSIX=$(ls *.vsix)
-          npx vsce publish --packagePath "$VSIX"
+          # An unquoted `ls *.vsix` word-splits once a second .vsix exists.
+          shopt -s nullglob
+          vsix=(*.vsix)
+          if [ ${#vsix[@]} -ne 1 ]; then
+            echo "expected exactly one .vsix, found ${#vsix[@]}: ${vsix[*]}" >&2
+            exit 1
+          fi
+          npx vsce publish --packagePath "${vsix[0]}"
