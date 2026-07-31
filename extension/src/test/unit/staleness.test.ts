@@ -25,6 +25,16 @@ describe("staleness", () => {
       assert.equal((await checkStaleness(fx.dir, repinned)).stale, false);
     }));
 
+  it("uncommitted changes are reported without making the review stale", () =>
+    withFixture(async (fx) => {
+      assert.equal((await checkStaleness(fx.dir, fx.manifest)).dirty, undefined);
+
+      writeFileSync(path.join(fx.dir, "b.txt"), "B1 uncommitted\n");
+      const dirty = await checkStaleness(fx.dir, fx.manifest);
+      assert.equal(dirty.dirty, 1, "one tracked file has uncommitted changes");
+      assert.equal(dirty.stale, false, "HEAD has not moved, so the pin is still right");
+    }));
+
   it("a base that no longer resolves is not reported as stale", () =>
     withFixture(async (fx) => {
       const noBase = { ...fx.manifest, base: "branch-that-does-not-exist" };

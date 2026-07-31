@@ -1,4 +1,4 @@
-import { gitMergeBase, gitRevParse } from "./git";
+import { gitDirtyCount, gitMergeBase, gitRevParse } from "./git";
 import { Manifest } from "./model";
 
 export interface Staleness {
@@ -8,9 +8,12 @@ export interface Staleness {
   summary?: string;
   /** Full explanation for the node tooltip: the reason and the fix. */
   detail?: string;
+  /**
+   * Tracked files with uncommitted changes. Independent of `stale`: the manifest
+   * can be pinned to the right commit while the files on disk have moved past it.
+   */
+  dirty?: number;
 }
-
-const FRESH: Staleness = { stale: false };
 
 /** Two hex refs name the same commit if one is a prefix of the other. */
 function sameCommit(a: string, b: string): boolean {
@@ -34,13 +37,15 @@ function sameCommit(a: string, b: string): boolean {
 export async function checkStaleness(repoRoot: string, manifest: Manifest): Promise<Staleness> {
   const liveHead = await gitRevParse(repoRoot, "HEAD");
   const liveMergeBase = await gitMergeBase(repoRoot, manifest.base, "HEAD");
+  const count = await gitDirtyCount(repoRoot);
+  const dirty = count !== undefined && count > 0 ? { dirty: count } : {};
 
   const headMoved =
     !!manifest.headSha && !!liveHead && !sameCommit(manifest.headSha, liveHead);
   const baseMoved = !!liveMergeBase && !sameCommit(manifest.mergeBase, liveMergeBase);
 
   if (!headMoved && !baseMoved) {
-    return FRESH;
+    return { stale: false, ...dirty };
   }
 
   const reason =
@@ -57,5 +62,6 @@ export async function checkStaleness(repoRoot: string, manifest: Manifest): Prom
       `This branch changed after the chapters were generated (${reason}). ` +
       "Reviewed checkmarks may no longer match the code. " +
       "Re-run the chapter-review skill to regenerate.",
+    ...dirty,
   };
 }

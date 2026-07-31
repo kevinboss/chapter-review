@@ -108,6 +108,10 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       if (this.orphanIssues().length > 0) {
         roots.push({ kind: "issuesRoot" });
       }
+      // Dirty second so it sits below the staler warning when both apply.
+      if (this.staleness?.dirty) {
+        roots.unshift({ kind: "dirtyWarning" });
+      }
       if (this.staleness?.stale) {
         roots.unshift({ kind: "staleWarning" });
       }
@@ -143,6 +147,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       case "hunk":
       case "issue":
       case "staleWarning":
+      case "dirtyWarning":
         return [];
     }
   }
@@ -207,6 +212,8 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
         return this.issuesRootItem();
       case "staleWarning":
         return this.staleWarningItem();
+      case "dirtyWarning":
+        return this.dirtyWarningItem();
     }
   }
 
@@ -221,6 +228,21 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       new vscode.ThemeColor("list.warningForeground")
     );
     item.tooltip = this.staleness?.detail;
+    item.command = { command: "chapterReview.refresh", title: "Re-check", arguments: [] };
+    return item;
+  }
+
+  private dirtyWarningItem(): vscode.TreeItem {
+    const n = this.staleness?.dirty ?? 0;
+    const item = new vscode.TreeItem(
+      `${n} file${n === 1 ? "" : "s"} with uncommitted changes`,
+      vscode.TreeItemCollapsibleState.None
+    );
+    item.id = "dirtyWarning";
+    item.iconPath = new vscode.ThemeIcon("pencil", new vscode.ThemeColor("list.warningForeground"));
+    item.tooltip =
+      "The diff shown here is from the last commit, so it does not include your " +
+      "uncommitted edits. Commit them and re-run the chapter-review skill to review them.";
     item.command = { command: "chapterReview.refresh", title: "Re-check", arguments: [] };
     return item;
   }
