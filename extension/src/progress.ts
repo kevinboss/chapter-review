@@ -1,3 +1,4 @@
+import type { DigestMap } from "./fingerprint";
 import { allEntries, Hunk, Manifest, ReviewedUnit, reviewKey } from "./model";
 
 /** A review unit paired with the digest of the content it stands for. */
@@ -24,6 +25,37 @@ export class ReviewProgress {
   isReviewedAt(key: string, currentDigest: string | undefined): boolean {
     const rec = this.reviewed.get(key);
     return rec !== undefined && currentDigest !== undefined && rec === currentDigest;
+  }
+
+  /**
+   * Re-key a whole-file checkmark onto the units of a file the partition has
+   * since split into hunks, dropping the whole-file row. Returns true if
+   * something moved, so the host knows to persist.
+   *
+   * Carries down only: merging hunks back cannot tell a full tick from a partial
+   * one, so that case re-opens the file rather than claim a check nobody made.
+   */
+  adoptWholeFileMarks(digests: DigestMap): boolean {
+    const adopted: [string, string][] = [];
+    const retire = new Set<string>();
+    for (const [key, d] of digests) {
+      if (key === d.wholeKey || this.isReviewedAt(key, d.unit)) {
+        continue;
+      }
+      if (this.isReviewedAt(d.wholeKey, d.file)) {
+        adopted.push([key, d.unit]);
+        retire.add(d.wholeKey);
+      }
+    }
+    // After the scan: retiring mid-loop would stop the row vouching for hunks
+    // not yet visited.
+    for (const [key, digest] of adopted) {
+      this.reviewed.set(key, digest);
+    }
+    for (const k of retire) {
+      this.reviewed.delete(k);
+    }
+    return retire.size > 0;
   }
 
   /** Tick or untick units in memory. The host then persists the result. */

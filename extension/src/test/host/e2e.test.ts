@@ -162,8 +162,8 @@ suite("CLI and extension over the same files", () => {
       const aKey = reviewKey("a.txt", first.chapters[0].files[0].hunks?.[0]);
       progress.setReviewed(
         [
-          { key: aKey, digest: digests.get(aKey) },
-          { key: reviewKey("b.txt"), digest: digests.get(reviewKey("b.txt")) },
+          { key: aKey, digest: digests.get(aKey)?.unit },
+          { key: reviewKey("b.txt"), digest: digests.get(reviewKey("b.txt"))?.unit },
         ],
         true
       );
@@ -181,11 +181,11 @@ suite("CLI and extension over the same files", () => {
       const afterDigests = await computeDigests(fx.dir, readManifestFromDisk(fx));
 
       assert.ok(
-        reloaded.isReviewedAt(aKey, afterDigests.get(aKey)),
+        reloaded.isReviewedAt(aKey, afterDigests.get(aKey)?.unit),
         "a.txt was untouched, so it stays reviewed"
       );
       assert.equal(
-        reloaded.isReviewedAt(reviewKey("b.txt"), afterDigests.get(reviewKey("b.txt"))),
+        reloaded.isReviewedAt(reviewKey("b.txt"), afterDigests.get(reviewKey("b.txt"))?.unit),
         false,
         "b.txt changed, so its carried row must not count"
       );
