@@ -10,7 +10,7 @@ import {
   resolveGitDir,
   reviewUriPath,
 } from "./gitContent";
-import { computeDigests } from "./fingerprint";
+import { computeDigests, type UnitDigest } from "./fingerprint";
 import { isOpen, Manifest, parseManifest, ReviewedUnit } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
@@ -120,7 +120,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   async function refreshDigests(): Promise<void> {
     provider.digests = provider.manifest
       ? await computeDigests(folderUri.fsPath, provider.manifest)
-      : new Map<string, string>();
+      : new Map<string, UnitDigest>();
+    // Persisted when it moved something: the next tick serializes only the units
+    // this manifest declares, which would drop the adopted marks again.
+    if (progress.adoptWholeFileMarks(provider.digests)) {
+      await persistProgress();
+    }
   }
 
   /** Checkmarks from progress.json; undefined when it is absent or unreadable. */

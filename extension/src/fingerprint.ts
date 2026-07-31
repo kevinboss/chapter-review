@@ -2,8 +2,21 @@ import { createHash } from "node:crypto";
 import { gitShow } from "./git";
 import { allEntries, Manifest, reviewKey } from "./model";
 
-/** Current content digest per review key (model.reviewKey), for one manifest. */
-export type DigestMap = Map<string, string>;
+/**
+ * What one review unit currently hashes to, plus the file-level context needed to
+ * match a checkmark that was recorded at a different granularity.
+ */
+export interface UnitDigest {
+  /** Digest of this unit alone: the hunk's lines, or the whole file. */
+  unit: string;
+  /** Digest of the entire file both sides, regardless of this unit's granularity. */
+  file: string;
+  /** The review key a whole-file checkmark on this path uses. */
+  wholeKey: string;
+}
+
+/** Current digests per review key (model.reviewKey), for one manifest. */
+export type DigestMap = Map<string, UnitDigest>;
 
 /**
  * Fingerprints the reviewed content of every unit in the manifest, so a checkmark
@@ -17,7 +30,9 @@ export type DigestMap = Map<string, string>;
  * when the branch moves underneath a stale manifest.
  *
  * Whole-file units hash both sides of the file; hunk units hash only that hunk's
- * old and new lines, so an edit to a sibling hunk leaves this one checked.
+ * old and new lines, so an edit to a sibling hunk leaves this one checked. Every
+ * unit also carries its file's digest, which is what lets a whole-file checkmark
+ * survive the partition re-cutting that file into hunks (see ReviewProgress).
  */
 export async function computeDigests(repoRoot: string, manifest: Manifest): Promise<DigestMap> {
   const headRef = manifest.headSha ?? manifest.head;
@@ -48,8 +63,10 @@ export async function computeDigests(repoRoot: string, manifest: Manifest): Prom
   for (const e of entries) {
     const oldText = get(manifest.mergeBase, e.oldPath ?? e.path);
     const newText = get(headRef, e.path);
+    const file = sha(`${oldText}\0${newText}`);
+    const wholeKey = reviewKey(e.path);
     if (!e.hunks) {
-      digests.set(reviewKey(e.path), sha(`${oldText}\0${newText}`));
+      digests.set(wholeKey, { unit: file, file, wholeKey });
       continue;
     }
     const oldLines = oldText.split("\n");
@@ -57,7 +74,11 @@ export async function computeDigests(repoRoot: string, manifest: Manifest): Prom
     for (const h of e.hunks) {
       const oldChunk = oldLines.slice(h.oldStart - 1, h.oldStart - 1 + h.oldLines).join("\n");
       const newChunk = newLines.slice(h.newStart - 1, h.newStart - 1 + h.newLines).join("\n");
-      digests.set(reviewKey(e.path, h), sha(`${oldChunk}\0${newChunk}`));
+      digests.set(reviewKey(e.path, h), {
+        unit: sha(`${oldChunk}\0${newChunk}`),
+        file,
+        wholeKey,
+      });
     }
   }
   return digests;

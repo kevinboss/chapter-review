@@ -71,7 +71,15 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
 
   /** Each review key a node covers, paired with its unit's current digest. */
   reviewUnitsFor(node: Node): ReviewUnit[] {
-    return this.reviewKeysFor(node).map((key) => ({ key, digest: this.digests.get(key) }));
+    return this.reviewKeysFor(node).map((key) => ({ key, digest: this.digests.get(key)?.unit }));
+  }
+
+  /**
+   * Whether one review unit reads as reviewed. An exact-match test: a mark
+   * recorded at another granularity is reconciled by adoptWholeFileMarks.
+   */
+  private isReviewed(key: string): boolean {
+    return this.progress.isReviewedAt(key, this.digests.get(key)?.unit);
   }
 
   /** Checkbox state for a node backed by review keys, or none if it has zero. */
@@ -80,7 +88,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     if (keys.length === 0) {
       return undefined;
     }
-    return keys.every((k) => this.progress.isReviewedAt(k, this.digests.get(k)))
+    return keys.every((k) => this.isReviewed(k))
       ? vscode.TreeItemCheckboxState.Checked
       : vscode.TreeItemCheckboxState.Unchecked;
   }
@@ -362,7 +370,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   } {
     const keys = entries.flatMap(entryKeys);
     return {
-      done: keys.filter((k) => this.progress.isReviewedAt(k, this.digests.get(k))).length,
+      done: keys.filter((k) => this.isReviewed(k)).length,
       total: keys.length,
     };
   }
