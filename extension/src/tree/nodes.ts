@@ -37,6 +37,9 @@ export interface IssuesRootNode {
 export interface StaleWarningNode {
   kind: "staleWarning";
 }
+export interface DirtyWarningNode {
+  kind: "dirtyWarning";
+}
 
 export type Node =
   | ChapterNode
@@ -46,7 +49,8 @@ export type Node =
   | HunkNode
   | IssueNode
   | IssuesRootNode
-  | StaleWarningNode;
+  | StaleWarningNode
+  | DirtyWarningNode;
 
 /** What the tree needs from review progress (ReviewProgress satisfies it). */
 export interface ProgressReader {

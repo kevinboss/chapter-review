@@ -41,6 +41,23 @@ export function gitRevParse(repoRoot: string, ref: string): Promise<string | und
   });
 }
 
+/**
+ * Tracked files with uncommitted changes, or undefined if the query can't run.
+ * `--untracked-files=no`: a new file nobody staged is not part of the diff.
+ */
+export function gitDirtyCount(repoRoot: string): Promise<number | undefined> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      ["status", "--porcelain", "--untracked-files=no"],
+      { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout) => {
+        resolve(err ? undefined : stdout.split("\n").filter((l) => l.trim() !== "").length);
+      }
+    );
+  });
+}
+
 /** `git merge-base <a> <b>` → SHA, or undefined if there is no common ancestor. */
 export function gitMergeBase(
   repoRoot: string,
