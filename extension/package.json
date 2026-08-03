@@ -12,6 +12,9 @@
     "directory": "extension"
   },
   "homepage": "https://github.com/kevinboss/chapter-review#readme",
+  "vsce": {
+    "baseImagesUrl": "https://github.com/kevinboss/chapter-review/raw/HEAD/extension"
+  },
   "bugs": {
     "url": "https://github.com/kevinboss/chapter-review/issues"
   },
