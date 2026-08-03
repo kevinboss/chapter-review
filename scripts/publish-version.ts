@@ -138,6 +138,35 @@ export function publishBlocker(target: Version, published: readonly string[]): R
   return undefined;
 }
 
+/**
+ * Why a stable version must not be released given the tags this repo already
+ * carries, or undefined when it may.
+ *
+ * Git is the complete record of stable releases; the Marketplace query is not,
+ * because it returns only the four most recent versions and a busy pre-release
+ * lane can fill that window entirely. Tags are what actually rule out a stable
+ * release that would land below one already cut.
+ */
+export function tagBlocker(target: Version, tags: readonly string[]): Refusal {
+  const higher = tags
+    .flatMap((t) => {
+      const v = parseVersion(t.trim().replace(/^v/, ""));
+      return v === undefined ? [] : [v];
+    })
+    .filter((v) => compareVersions(v, target) > 0);
+  const highest = higher.reduce<Version | undefined>(
+    (max, v) => (max === undefined || compareVersions(v, max) > 0 ? v : max),
+    undefined
+  );
+  if (highest === undefined) {
+    return undefined;
+  }
+  return (
+    `${formatVersion(target)} is behind v${formatVersion(highest)}, already tagged here.\n` +
+    "  Users never move to a lower version, so the release would reach nobody."
+  );
+}
+
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extensionDir = path.join(repoRoot, "extension");
 
@@ -175,19 +204,28 @@ function commitCount(): number {
   return n;
 }
 
+/** Every `v*` tag in this repo, the complete record of stable releases. */
+function gitTags(): string[] {
+  return execFileSync("git", ["tag", "--list", "v*"], { cwd: repoRoot, encoding: "utf8" })
+    .split("\n")
+    .filter((line) => line.trim() !== "");
+}
+
 /**
- * Every version the Marketplace currently holds for `id`.
+ * The versions the Marketplace reports for `id`: the four most recent, which is
+ * all the gallery returns whatever flags it is asked for. Enough to catch a
+ * collision with something just published, not a substitute for tagBlocker.
  *
- * Fails closed. Without this list neither a duplicate nor a backwards version can
- * be ruled out, and those are exactly the mistakes that cannot be undone once
- * published, so an unreachable Marketplace has to stop the publish. That also
- * means the very first publish of a brand-new extension needs a hand.
+ * Fails closed, because a publish cannot be taken back.
  */
 function publishedVersions(id: string): string[] {
-  const npx = process.platform === "win32" ? "npx.cmd" : "npx";
+  // node against vsce's own entry script, not `npx vsce`: on Windows the npx
+  // shim is a .cmd, which execFile refuses to spawn (EINVAL), so going through
+  // it would make this fail closed on every local run.
+  const vsce = path.join(extensionDir, "node_modules", "@vscode", "vsce", "vsce");
   const out = ((): string => {
     try {
-      return execFileSync(npx, ["vsce", "show", id, "--json"], {
+      return execFileSync(process.execPath, [vsce, "show", id, "--json"], {
         cwd: extensionDir,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
@@ -248,6 +286,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     die(`publish-version: ${parity}`);
   }
   const wanted = target(lane, process.argv[3], stable);
+  // Stable only: a pre-release is already monotonic by construction, since the
+  // commit count only grows, and pre-releases are never tagged.
+  const behindTag = lane === "stable" ? tagBlocker(wanted, gitTags()) : undefined;
+  if (behindTag !== undefined) {
+    die(`publish-version: ${behindTag}`);
+  }
   const blocker = publishBlocker(wanted, publishedVersions(id));
   if (blocker !== undefined) {
     die(`publish-version: ${blocker}`);
