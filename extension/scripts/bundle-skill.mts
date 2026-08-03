@@ -1,17 +1,15 @@
 // Copies the chapter-review skill into the extension so it ships inside the
-// .vsix, and stamps the bundled copy's version with the extension's version.
+// .vsix, and stamps the bundled copy with a digest of its own contents.
 // The skill's source of truth is the repo's .claude/skills/chapter-review;
 // extension/skill/ is a build artifact (gitignored) regenerated on every build.
 //
-// Two things get stamped. `version` is the extension's version, for display and
-// release traceability. `contentHash` is what the install/update check actually
-// compares: the installed skill is a projection of this bundle, so "should the
-// user update?" is "does their copy differ from what this plugin carries?", with
-// no notion of newer or older. A version alone could not answer that, because a
-// skill edit between releases leaves the version untouched.
+// `contentHash` is the skill's entire identity: the installed copy is a projection
+// of this bundle, so "should the user update?" is just "does their copy differ?".
+// No version is stamped, because inside the digest it would make one skill built
+// at two versions look like two, prompting an update for identical content.
 //
-// The source skill carries neither stamp; they exist only on shipped
-// (bundled/installed) copies, added here. Runs from vscode:prepublish.
+// The source skill carries no stamp; it exists only on shipped (bundled or
+// installed) copies, added here. Runs from vscode:prepublish.
 
 import { createHash } from "node:crypto";
 import { cpSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -33,26 +31,21 @@ cpSync(src, dest, {
   filter: (entry) => !SKIP.has(path.basename(entry)),
 });
 
-const pkg: unknown = JSON.parse(readFileSync(path.join(extDir, "package.json"), "utf8"));
-if (typeof pkg !== "object" || pkg === null || !("version" in pkg) || typeof pkg.version !== "string") {
-  throw new Error("extension/package.json has no string `version`");
-}
-const { version } = pkg;
+// Hashed before the stamp is written, so the digest covers exactly what was
+// copied and never itself. That also makes it reproducible: the same source tree
+// always yields the same hash, whatever the extension version happens to be.
 const skillMd = path.join(dest, "SKILL.md");
-writeFileSync(skillMd, stamp(readFileSync(skillMd, "utf8"), "version", version));
-
-// Hashed after the version stamp and before the hash stamp, so the digest covers
-// everything shipped (the version included) and never itself.
 const contentHash = hashTree(dest);
-writeFileSync(skillMd, stamp(readFileSync(skillMd, "utf8"), "contentHash", contentHash));
+writeFileSync(skillMd, stampContentHash(readFileSync(skillMd, "utf8"), contentHash));
 
 /**
- * Writes `metadata.<key>` into the skill's YAML frontmatter: overwrites an
+ * Writes `metadata.contentHash` into the skill's YAML frontmatter: overwrites an
  * existing line, else adds it under an existing `metadata:` block, else inserts a
  * fresh `metadata:` block at the end of the frontmatter. Kept under `metadata:`
  * because the agent-skill schema rejects unknown top-level keys.
  */
-function stamp(text: string, key: string, value: string): string {
+function stampContentHash(text: string, value: string): string {
+  const key = "contentHash";
   const line = new RegExp(`^\\s*${key}:\\s*.*$`, "m");
   if (line.test(text)) {
     return text.replace(new RegExp(`^(\\s*${key}:\\s*).*$`, "m"), `$1${value}`);
@@ -89,5 +82,5 @@ function hashTree(root: string): string {
 
 console.log(
   `Bundled skill: ${path.relative(extDir, src)} -> ${path.relative(extDir, dest)} ` +
-    `(version ${version}, contentHash ${contentHash})`
+    `(contentHash ${contentHash})`
 );

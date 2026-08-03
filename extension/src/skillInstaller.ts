@@ -7,8 +7,8 @@ import { errorMessage } from "./util";
 // The skill's source of truth ships inside the .vsix at <extension>/skill/.
 
 const SKILL_NAME = "chapter-review";
-// globalState: the bundled skill version we last showed an update notice for,
-// so an available update is announced once per version, not in every git repo.
+// globalState: the content hash of the bundled skill we last showed an update
+// notice for, so an update is announced once per bundle, not in every git repo.
 const NOTIFIED_UPDATE_KEY = "chapterReview.updateNotifiedVersion";
 
 type Scope = "user" | "workspace";
@@ -59,28 +59,29 @@ export function installTargets(homeDir: string = os.homedir()): InstallTarget[] 
   return targets;
 }
 
-/** What a shipped SKILL.md's `metadata` block records about its own build. */
+/**
+ * What a shipped SKILL.md's `metadata` block records about its own build. One
+ * field, but an object so that "no file" and "file without a stamp" stay
+ * distinguishable (see readSkillStamp).
+ */
 export interface SkillStamp {
-  /** Extension version this copy was bundled from; display only. */
-  version?: string;
-  /** Digest of the whole skill folder, and the identity the update check uses. */
+  /** Digest of the whole skill folder, and the skill's entire identity. */
   contentHash?: string;
 }
 
 /**
- * The `metadata` stamps from a SKILL.md, or undefined when there is no such file.
+ * The `metadata` stamp from a SKILL.md, or undefined when there is no such file.
  * Absent file and present-but-unstamped are different answers: the second is an
- * installed copy that simply predates a stamp, and it needs updating, not
- * installing. They live under `metadata:` because VS Code's agent-skill schema
+ * installed copy that simply predates the stamp, and it needs updating, not
+ * installing. It lives under `metadata:` because VS Code's agent-skill schema
  * rejects unknown top-level keys; the leading indent is allowed for.
  */
 async function readSkillStamp(skillMd: vscode.Uri): Promise<SkillStamp | undefined> {
   try {
     const bytes = await vscode.workspace.fs.readFile(skillMd);
     const text = Buffer.from(bytes).toString("utf8");
-    const field = (key: string): string | undefined =>
-      new RegExp(`^\\s*${key}:\\s*["']?([^"'\\n]+?)["']?\\s*$`, "m").exec(text)?.[1];
-    return { version: field("version"), contentHash: field("contentHash") };
+    const found = /^\s*contentHash:\s*["']?([^"'\n]+?)["']?\s*$/m.exec(text)?.[1];
+    return { contentHash: found };
   } catch {
     return undefined;
   }
@@ -127,11 +128,11 @@ export type SkillStatus = "missing" | "present" | "current";
  *   - "present": a copy exists and none matches this bundle (offer update);
  *   - "missing": no copy exists anywhere (offer a fresh install).
  *
- * Equality, not ordering. The installed skill is a projection of the plugin, so
- * the only question is whether it matches what this plugin carries; a copy that
- * differs is offered an update whether its version is older, newer or identical.
- * Comparing versions could not see the case that matters most, a skill edited
- * between releases, where the content moved and the version did not.
+ * Equality, not ordering, and the skill carries no version of its own. The
+ * installed copy is a projection of this bundle, so the only question is whether
+ * it matches; a copy that differs is offered an update either way. Comparing
+ * extension versions instead would miss the case that matters most, a skill
+ * edited between releases, where the content moves and the version does not.
  */
 export function computeSkillStatus(
   bundledHash: string | undefined,
@@ -148,25 +149,33 @@ export function computeSkillStatus(
 }
 
 
-/** Context-key value while the probe is in flight; no affordance is gated on it. */
-const CHECKING = "checking";
+const SKILL_STATUS_KEY = "chapterReview.skillStatus";
 
 /**
- * Sets the chapterReview.skillStatus context key, which gates the install/update
- * affordances (view-title menu, welcome link): "Install" when missing, "Update"
- * when a different version is present, and nothing when current.
+ * Every value the skillStatus context key can hold: the three statuses plus
+ * "checking" while the probe runs. package.json's when-clauses branch on exactly
+ * these, so a value added here needs a clause there too.
+ */
+type SkillContext = SkillStatus | "checking";
+
+const setSkillContext = (value: SkillContext): Thenable<unknown> =>
+  vscode.commands.executeCommand("setContext", SKILL_STATUS_KEY, value);
+
+/**
+ * Sets the skillStatus context key, which gates the install/update affordances
+ * (view-title menu, welcome link): "Install" when missing, "Update" when a copy
+ * that differs is present, and nothing when current.
  *
  * Claimed as "checking" before the directory probe, so the wait shows no
  * affordance rather than "Install" on a machine that already has the skill.
  */
 export async function refreshSkillContext(host: SkillHost): Promise<void> {
-  await vscode.commands.executeCommand("setContext", "chapterReview.skillStatus", CHECKING);
+  await setSkillContext("checking");
   const bundled = await readSkillStamp(vscode.Uri.joinPath(bundledSkillDir(host), "SKILL.md"));
   const installed = await Promise.all(
     installTargets().map((t) => readSkillStamp(vscode.Uri.joinPath(t.dir, "SKILL.md")))
   );
-  const status = computeSkillStatus(bundled?.contentHash, installed);
-  await vscode.commands.executeCommand("setContext", "chapterReview.skillStatus", status);
+  await setSkillContext(computeSkillStatus(bundled?.contentHash, installed));
 }
 
 /** Command entry point: pick a location (or use the given scope) and install. */
@@ -189,9 +198,8 @@ export async function installSkill(host: SkillHost, scope?: Scope): Promise<void
 
   const existing = await readSkillStamp(vscode.Uri.joinPath(target.dir, "SKILL.md"));
   if (existing && existing.contentHash === bundled?.contentHash) {
-    const label = existing.version ? `skill ${existing.version}` : "skill";
     const choice = await vscode.window.showInformationMessage(
-      `Chapter Review ${label} at ${target.detail} already matches this extension.`,
+      `The Chapter Review skill at ${target.detail} already matches this extension.`,
       "Reinstall"
     );
     if (choice !== "Reinstall") {
@@ -204,8 +212,8 @@ export async function installSkill(host: SkillHost, scope?: Scope): Promise<void
 /**
  * On activation, notify only opted-in users of an available update: an installed
  * copy exists and does not match this bundle. Shown once per bundle so it doesn't
- * re-fire in every git repo, keyed by content hash rather than version so a skill
- * edited between releases still announces itself exactly once.
+ * re-fire in every git repo, keyed by content hash, so a skill edited between
+ * releases still announces itself exactly once.
  *
  * A missing skill is deliberately NOT announced here. The extension activates
  * in every git repo, so an unsolicited "install?" toast would nag across
@@ -214,8 +222,9 @@ export async function installSkill(host: SkillHost, scope?: Scope): Promise<void
  * "Install or Update Skill" command.
  */
 export async function checkSkill(context: vscode.ExtensionContext): Promise<void> {
-  const bundled = await readSkillStamp(vscode.Uri.joinPath(bundledSkillDir(context), "SKILL.md"));
-  const bundledHash = bundled?.contentHash;
+  const bundledHash = (
+    await readSkillStamp(vscode.Uri.joinPath(bundledSkillDir(context), "SKILL.md"))
+  )?.contentHash;
   if (!bundledHash) {
     return; // no bundled skill (e.g. dev build without bundling); nothing to offer
   }
@@ -239,8 +248,7 @@ export async function checkSkill(context: vscode.ExtensionContext): Promise<void
 
   await context.globalState.update(NOTIFIED_UPDATE_KEY, bundledHash);
   const choice = await vscode.window.showInformationMessage(
-    `The Chapter Review skill at ${outdated.detail} differs from this extension's copy` +
-      `${bundled.version ? ` (${bundled.version})` : ""}.`,
+    `The Chapter Review skill at ${outdated.detail} differs from the copy this extension carries.`,
     "Update",
     "Not now"
   );

@@ -66,7 +66,12 @@ suite("installing the skill", () => {
     });
 
     const text = Buffer.from(await vscode.workspace.fs.readFile(skillMd)).toString("utf8");
-    assert.match(text, /^\s*version:/m, "bundle-skill stamps the version it installed");
+    assert.match(text, /^\s*contentHash: [0-9a-f]+$/m, "bundle-skill stamps the digest it installed");
+    assert.doesNotMatch(
+      text,
+      /^\s*version:/m,
+      "no version is stamped: the same skill at two versions must not read as two skills"
+    );
   });
 });
 
@@ -86,7 +91,7 @@ async function waitFor(probe: () => Promise<void>, attempts = 60): Promise<void>
 }
 
 suite("skill status", () => {
-  const at = (contentHash?: string, version = "1.2.0"): SkillStamp => ({ version, contentHash });
+  const at = (contentHash?: string): SkillStamp => ({ contentHash });
 
   test("nothing bundled means nothing to offer", () => {
     assert.equal(computeSkillStatus(undefined, []), "current");
@@ -107,20 +112,11 @@ suite("skill status", () => {
     assert.equal(computeSkillStatus("aaaa", [at("aaaa")]), "current");
   });
 
-  test("same version, different content is still an update", () => {
-    // The case a version comparison cannot see: the skill was edited between
-    // releases, so the content moved while the stamped version stood still.
-    assert.equal(computeSkillStatus("aaaa", [at("bbbb", "1.2.0")]), "present");
-  });
-
-  test("a newer version with different content is still an update", () => {
-    // The installed skill is a projection of the plugin, so matching the plugin
-    // is the goal; which side is "newer" carries no weight.
-    assert.equal(computeSkillStatus("aaaa", [at("bbbb", "9.9.9")]), "present");
-  });
-
   test("an unstamped copy is an update, not a fresh install", () => {
-    assert.equal(computeSkillStatus("aaaa", [{ version: undefined, contentHash: undefined }]), "present");
+    // The three states this rests on: absent file, present but unstamped, present
+    // with a hash. Collapsing the middle one into "missing" would offer a fresh
+    // install over a skill the user already has.
+    assert.equal(computeSkillStatus("aaaa", [{ contentHash: undefined }]), "present");
   });
 
   test("one matching copy is enough, wherever it sits", () => {
