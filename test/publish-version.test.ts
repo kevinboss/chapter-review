@@ -11,6 +11,7 @@ import {
   parseVersion,
   prereleaseVersion,
   publishBlocker,
+  tagBlocker,
   type Version,
 } from "../scripts/publish-version.ts";
 
@@ -85,6 +86,28 @@ test("the lanes are compared independently", () => {
   assert.equal(publishBlocker(v(0, 9, 1048), ["0.8.0", "0.8.1", "0.9.1047"]), undefined);
   // A different major is a different lane too.
   assert.equal(publishBlocker(v(1, 9, 1), ["0.9.9999"]), undefined);
+});
+
+test("a stable version below an existing tag is refused", () => {
+  // Git is the complete record the Marketplace query is not: it returns only the
+  // four most recent versions, which a busy pre-release lane fills on its own.
+  const blocker = tagBlocker(v(0, 8, 1), ["v0.7.3", "v0.8.0", "v0.10.0"]);
+  assert.ok(blocker?.includes("v0.10.0"), "the message names the tag it is behind");
+});
+
+test("a stable version above every tag is allowed", () => {
+  assert.equal(tagBlocker(v(0, 10, 0), ["v0.7.3", "v0.8.0"]), undefined);
+  assert.equal(tagBlocker(v(0, 8, 0), []), undefined, "the first release has no tags to clear");
+});
+
+test("the tag being released does not block itself", () => {
+  // release.yml runs on the tag, so it is always present by then. Only a strictly
+  // higher tag counts.
+  assert.equal(tagBlocker(v(0, 8, 0), ["v0.7.3", "v0.8.0"]), undefined);
+});
+
+test("tags that are not versions are ignored", () => {
+  assert.equal(tagBlocker(v(0, 8, 0), ["nightly", "v", "release-candidate"]), undefined);
 });
 
 test("published entries that do not parse are ignored, not fatal", () => {

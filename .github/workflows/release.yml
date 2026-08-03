@@ -20,6 +20,12 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
+        with:
+          # publish-version.ts reads every v* tag to rule out a release that would
+          # land below one already cut. A tag-triggered checkout carries only its
+          # own ref by default.
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc

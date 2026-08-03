@@ -63,7 +63,7 @@ Run `npm install && npm run compile` in `extension/` once, then F5. Two launch t
 
 ## Status
 
-Skill portable and self-contained. Extension packaged as a `.vsix` via `vsce`. CI runs the validator tests and the standalone-portability check, then builds and tests the extension, on every push and PR. A push to `main` that passes both publishes a pre-release to the Marketplace. Tagging `vX.Y.Z` (see the `/release` skill) publishes the `.vsix` and skill bundle to a GitHub Release and the extension to the Marketplace as a stable release. Both lanes run `scripts/publish-version.ts`, which refuses a version that is out of lane, already published, or behind what the Marketplace holds.
+Skill portable and self-contained. Extension packaged as a `.vsix` via `vsce`. CI runs the validator tests and the standalone-portability check, then builds and tests the extension, on every push and PR. A push to `main` that passes both publishes a pre-release to the Marketplace. Tagging `vX.Y.Z` (see the `/release` skill) publishes the `.vsix` and skill bundle to a GitHub Release and the extension to the Marketplace as a stable release. Both lanes run `scripts/publish-version.ts`, which refuses a version that is out of lane, already published, or behind one this repo has already tagged.
 
 ## License
 
