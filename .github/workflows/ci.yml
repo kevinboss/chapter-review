@@ -91,3 +91,82 @@ jobs:
           done < /tmp/vsix-files.txt
           node /tmp/vsix-skill/chapter-review --help
           node /tmp/vsix-skill/validate.ts /tmp/vsix-skill/example-chapters.json
+
+  # Every push to main that is not a stable release publishes a pre-release, so
+  # anyone opted into the pre-release channel tracks main. Gated on both jobs
+  # above: nothing reaches the Marketplace that CI has not passed.
+  pre-release:
+    name: Publish pre-release
+    needs: [contract, extension]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Shared with release.yml so the two lanes never publish concurrently.
+    concurrency:
+      group: marketplace-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history: the pre-release patch is the commit count. Tags: the
+          # stable-lane guard below reads them.
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Skip commits that belong to the stable lane
+        id: lane
+        run: |
+          # A commit that moves the version is preparing a stable release, and its
+          # tag often arrives as a separate push, so waiting for a tag would
+          # publish a pre-release built from the release commit itself.
+          read_version() { node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version"; }
+          prev=$(git show HEAD~1:extension/package.json 2>/dev/null | read_version 2>/dev/null || true)
+          curr=$(node -p "require('./extension/package.json').version")
+          if [ -n "$prev" ] && [ "$prev" != "$curr" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=the version moved $prev -> $curr, so this is a release commit" >> "$GITHUB_OUTPUT"
+          elif tag=$(git describe --exact-match --tags HEAD 2>/dev/null); then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=HEAD is tagged $tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report the skip
+        if: steps.lane.outputs.skip == 'true'
+        run: |
+          echo "::notice::No pre-release published: ${{ steps.lane.outputs.reason }}"
+
+      # publish-version.ts asks the Marketplace what is already published, via the
+      # vsce in extension/node_modules.
+      - name: Install
+        if: steps.lane.outputs.skip != 'true'
+        working-directory: extension
+        run: npm ci
+
+      - name: Decide the version
+        if: steps.lane.outputs.skip != 'true'
+        id: version
+        run: |
+          # Assigned, not echoed inline: `echo "v=$(cmd)"` swallows a non-zero exit
+          # and would hand the publish an empty version.
+          VERSION=$(node scripts/publish-version.ts prerelease)
+          test -n "$VERSION"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to VS Code Marketplace
+        if: steps.lane.outputs.skip != 'true'
+        working-directory: extension
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          # Uncommitted, and the checkout is throwaway; vsce packages what it reads
+          # from package.json.
+          npm version "${{ steps.version.outputs.value }}" --no-git-tag-version --allow-same-version
+          # Deliberately no --skip-duplicate: a duplicate has to fail loudly, which
+          # is what the check in publish-version.ts exists for.
+          npx vsce publish --pre-release --no-dependencies
