@@ -28,7 +28,7 @@ The extension is purely a review surface.
 ## Installing
 
 1. **Install the extension** — get **Chapter Review** from the [VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=kevinboss.chapter-review), or download `chapter-review-<version>.vsix` from [Releases](https://github.com/kevinboss/chapter-review/releases) and run "Extensions: Install from VSIX…" in VSCode (or `code --install-extension <file>.vsix`).
-2. **Install the skill** — the extension bundles it. Run **Chapter Review: Install Skill** from the Command Palette (or click **Install the skill** in the empty Chapters view) and pick a location: `~/.claude/skills/` for every repo, or the current workspace only. Restart your coding agent so it loads the skill; the extension prompts you to update it when a newer version ships.
+2. **Install the skill** — the extension bundles it. Run **Chapter Review: Install Skill** from the Command Palette (or click **Install the skill** in the empty Chapters view) and pick a location: `~/.claude/skills/` for every repo, or the current workspace only. Restart your coding agent so it loads the skill; the extension prompts you to update whenever your copy differs from the one it carries.
 
 Installing the skill by hand instead: copy `.claude/skills/chapter-review/` into your repo's `.claude/skills/`, or unzip `chapter-review-skill.zip` from a release there. It needs `git` and `node` 22.18 or newer.
 
