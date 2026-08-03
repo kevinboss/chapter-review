@@ -14,7 +14,9 @@ Cut a version tag; GitHub Actions (`.github/workflows/release.yml`) does the bui
    - Up to date with origin: `git fetch` then confirm no unpushed/unpulled commits.
    - Green: `npm test`, and in `extension/` run `npm ci && npm run compile`.
 
-2. **Choose the version.** Read the current version from `extension/package.json`. Bump per semver: patch for fixes, minor for features, major for breaking contract changes. Take the user's explicit version/bump if given. Confirm the target `vX.Y.Z` with the user before writing anything (their preference: confirm before committing).
+2. **Choose the version — the minor must be even.** Read the current version from `extension/package.json`. Bump per semver otherwise: patch for fixes, minor for features, major for breaking contract changes. Take the user's explicit version/bump if given. Confirm the target `vX.Y.Z` with the user before writing anything (their preference: confirm before committing).
+
+   **Odd minors belong to the pre-release channel**, which publishes `0.<even+1>.<commit count>` from every push to main. So stable steps two at a time: after `0.8.x` the next feature release is `0.10.0`, never `0.9.0`. Patches within an even minor are unrestricted (`0.8.1`, `0.8.2`, …). `release.yml` enforces this: `scripts/publish-version.ts stable <tag>` fails an odd minor, a tag that disagrees with `package.json`, or a version already on the Marketplace.
 
 3. **Update the changelog.** Add a `## [X.Y.Z] - YYYY-MM-DD` section at the top of `extension/CHANGELOG.md` (today's date, Keep a Changelog headings — Added / Changed / Fixed / Removed as they apply), plus the matching `[X.Y.Z]: https://github.com/kevinboss/chapter-review/releases/tag/vX.Y.Z` link at the bottom. Summarize the user-facing changes since the last tag: `git log --oneline vPREV..HEAD` gives the raw list, but write for users, not commit by commit. The Marketplace renders this file, so a missing entry ships a blank changelog. This is enforced, not optional: `release.yml` fails the build when the tag has no `## [X.Y.Z]` section, so a forgotten changelog aborts the release (after the tag is already pushed) rather than shipping silently. Fix it by adding the entry and re-tagging.
 
@@ -30,6 +32,7 @@ Cut a version tag; GitHub Actions (`.github/workflows/release.yml`) does the bui
 
 ## Notes
 
+- **The bump commit publishes no pre-release, by design.** The pre-release job in `ci.yml` skips any commit that moves the version in `extension/package.json`, and any tagged commit. Without that, cutting a release would publish a stable version and a pre-release of the same code at once. The version check is the guard that still works when the bump and the tag are pushed separately, since the branch push carries no tag yet. Don't remove either as dead code.
 - Release notes are auto-generated from commits/PRs since the last tag (`--generate-notes`). For curated notes, edit the release after it's created.
 - The repo is public. Users install from the VS Code Marketplace (search "Chapter Review"), or download the `.vsix` from the GitHub Release and "Install from VSIX" in VSCode.
 - Marketplace publishing uses the `VSCE_PAT` repo secret (an Azure DevOps PAT scoped to Marketplace > Manage). If it expires the publish step fails while the GitHub Release still succeeds; regenerate the token and refresh the secret with `gh secret set VSCE_PAT`.

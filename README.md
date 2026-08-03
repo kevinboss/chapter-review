@@ -32,6 +32,10 @@ The extension is purely a review surface.
 
 Installing the skill by hand instead: copy `.claude/skills/chapter-review/` into your repo's `.claude/skills/`, or unzip `chapter-review-skill.zip` from a release there. It needs `git` and `node` 22.18 or newer.
 
+### Pre-releases
+
+Every push to `main` publishes a pre-release build to the Marketplace. To ride it, open the extension's Marketplace page in VSCode and use **Switch to Pre-Release Version**. Switch back with **Switch to Release Version**.
+
 ## Repository layout
 
 - **`.claude/skills/chapter-review/`** — the Claude Code skill and its self-contained contract. Partitions the current branch's diff into chapters and writes the manifest to `<git-dir>/chapter-review/chapters.json` in the target repo (inside `.git`, so the worktree and git status stay clean). The folder bundles everything it needs: `SKILL.md`, the `chapter-review` CLI (TypeScript, no build step), `chapters.schema.json` (draft-07 contract), `validate.ts` (zero-dependency validator, authoritative), and `example-chapters.json` (worked example). Copy the folder into any repo's `.claude/skills/` to install; `git` and `node` 22.18 or newer are required.
@@ -59,7 +63,7 @@ Run `npm install && npm run compile` in `extension/` once, then F5. Two launch t
 
 ## Status
 
-Skill portable and self-contained. Extension packaged as a `.vsix` via `vsce`. CI runs the validator tests and the standalone-portability check, then builds the extension, on every push and PR. Tagging `vX.Y.Z` (see the `/release` skill) publishes the `.vsix` and skill bundle to a GitHub Release and the extension to the VSCode Marketplace.
+Skill portable and self-contained. Extension packaged as a `.vsix` via `vsce`. CI runs the validator tests and the standalone-portability check, then builds and tests the extension, on every push and PR. A push to `main` that passes both publishes a pre-release to the Marketplace. Tagging `vX.Y.Z` (see the `/release` skill) publishes the `.vsix` and skill bundle to a GitHub Release and the extension to the Marketplace as a stable release. Both lanes run `scripts/publish-version.ts`, which refuses a version that is out of lane, already published, or behind what the Marketplace holds.
 
 ## License
 

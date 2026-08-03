@@ -12,6 +12,12 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Shared with the pre-release job in ci.yml, so a stable publish and a
+    # pre-release publish can never write to the Marketplace at the same time.
+    # `git push --follow-tags` fires both workflows from one command.
+    concurrency:
+      group: marketplace-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -20,14 +26,14 @@ jobs:
           cache: npm
           cache-dependency-path: extension/package-lock.json
 
-      - name: Tag must match extension version
-        run: |
-          VERSION=$(node -p "require('./extension/package.json').version")
-          TAG=${GITHUB_REF_NAME#v}
-          if [ "$VERSION" != "$TAG" ]; then
-            echo "::error::tag $GITHUB_REF_NAME does not match extension version $VERSION"
-            exit 1
-          fi
+      # Before the version check: publish-version.ts asks the Marketplace what is
+      # already published, via the vsce in extension/node_modules.
+      - name: Install
+        working-directory: extension
+        run: npm ci
+
+      - name: Version must match the tag, sit on an even minor, and be unpublished
+        run: node scripts/publish-version.ts stable "$GITHUB_REF_NAME"
 
       - name: Changelog must have an entry for this version
         run: |
@@ -39,9 +45,7 @@ jobs:
 
       - name: Build .vsix
         working-directory: extension
-        run: |
-          npm ci
-          npm run package
+        run: npm run package
 
       - name: Bundle the skill
         run: |
