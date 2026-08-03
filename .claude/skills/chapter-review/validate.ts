@@ -40,8 +40,7 @@ const ISO_8601 =
 const isObject = (x: unknown): x is Record<string, unknown> =>
   x !== null && typeof x === "object" && !Array.isArray(x);
 
-// Array.isArray widens `unknown` to `any[]`, which would put `any` back into
-// every element. This keeps elements at `unknown`.
+// Array.isArray, but leaving elements at `unknown` rather than `any`.
 const isArray = (x: unknown): x is unknown[] => Array.isArray(x);
 
 /** True when `x` is a string the set contains — the set lookup alone rejects `unknown`. */
@@ -293,8 +292,6 @@ export function isManifest(x: unknown): x is Manifest {
 export function validateManifest(manifest: unknown): ValidationResult {
   const structural = structuralErrors(manifest);
   if (structural.length > 0) return { ok: false, errors: structural };
-  // A predicate rather than an assertion, so the narrowing below is something the
-  // compiler agrees with instead of something this file claims.
   if (!hasManifestShape(manifest)) {
     return { ok: false, errors: ["schema: manifest must be an object"] };
   }

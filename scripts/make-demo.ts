@@ -235,8 +235,6 @@ for (const [owner, perPath] of assignments) {
 }
 
 function emitEntry(owner: string, { file, hunks }: Entry): FileEntry {
-  // Built in one expression rather than mutated field by field, so the result is
-  // a FileEntry at every point instead of an incomplete object TS has to widen.
   const split = (ownersPerPath.get(file.path) ?? 0) > 1;
   return {
     path: file.path,

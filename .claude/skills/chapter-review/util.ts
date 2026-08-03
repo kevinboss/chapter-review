@@ -14,10 +14,7 @@ export function die(msg: string, code = 1): never {
 export const isRecord = (x: unknown): x is Record<string, unknown> =>
   x !== null && typeof x === "object" && !Array.isArray(x);
 
-/**
- * Array.isArray widens `unknown` to `any[]`, which puts `any` back into every
- * element. This keeps elements at `unknown`.
- */
+/** Array.isArray, but leaving elements at `unknown` rather than `any`. */
 export const isArray = (x: unknown): x is unknown[] => Array.isArray(x);
 
 /**

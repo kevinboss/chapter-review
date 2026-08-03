@@ -234,9 +234,6 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
           );
         }
       }
-      // Re-stated from the narrowed locals rather than asserted: the loop above
-      // already exited unless all three are set, but only these bindings say so
-      // in a way the compiler can check.
       const { severity, note } = fields;
       if (severity === undefined || note === undefined) return;
       const issue: Issue = {
