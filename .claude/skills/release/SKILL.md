@@ -12,7 +12,7 @@ Cut a version tag; GitHub Actions (`.github/workflows/release.yml`) does the bui
 1. **Preflight — abort if any fails.**
    - On `main` and clean: `git status --porcelain` empty, `git rev-parse --abbrev-ref HEAD` is `main`.
    - Up to date with origin: `git fetch` then confirm no unpushed/unpulled commits.
-   - Green: `npm test`, and in `extension/` run `npm ci && npm run compile`.
+   - Green: `npm test` at the root, and in `extension/` run `npm ci && npm run compile && npm test`. The extension has its own suites now, and compiling alone says nothing about them. The host suite (`npm run test:host`) is not needed here: CI runs it on every push, so the commit you are about to tag has already been through it.
 
 2. **Choose the version — the minor must be even.** Read the current version from `extension/package.json`. Bump per semver otherwise: patch for fixes, minor for features, major for breaking contract changes. Take the user's explicit version/bump if given. Confirm the target `vX.Y.Z` with the user before writing anything (their preference: confirm before committing).
 
