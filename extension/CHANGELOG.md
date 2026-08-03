@@ -4,6 +4,43 @@ All notable changes to the Chapter Review extension are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-08-03
+
+### Added
+- Pre-release channel. Every push to `main` now publishes a pre-release build,
+  reachable from "Switch to Pre-Release Version" on the extension's Marketplace
+  page. Stable releases use even minor versions and pre-releases the next odd
+  one, so the two channels never collide on a version number.
+- A warning row when the worktree has uncommitted changes, so it is clear that
+  the chapters render the last commit rather than what is currently on disk.
+- Review findings carry a confidence, `suspected` or `verified`. A first-pass
+  note now reads as something to check before relying on, not as settled.
+- `chapter-review uncheck` clears the checkmark on a file or hunk, to send the
+  reviewer back to something whose own bytes did not change.
+- `chapter-review write --dry-run` runs every check and prints the same report
+  as a real write, installing nothing.
+- A finding can be pinned to a hunk of a file the partition claims whole, so two
+  findings on the same file stay distinguishable.
+
+### Changed
+- Review progress lives in its own `progress.json` beside the manifest. The
+  agent owns `chapters.json` and the extension owns progress, so neither side's
+  writes can drop the other's.
+- A checkmark on an unchanged file now survives a regeneration that splits that
+  file into hunks. The tick used to be discarded even though the content matched.
+- The prompt to update the installed skill compares content rather than version
+  numbers, so it fires when your copy actually differs from the bundled one.
+- The skill's command reference moved to `COMMANDS.md`, leaving `SKILL.md` for
+  the partitioning guidance.
+
+### Fixed
+- `chapter-review write` refuses a partition the diff contradicts: an unclaimed
+  file or hunk, a range the diff does not have, a path outside the diff, or a
+  status git disagrees with. It names every offender instead of installing a
+  manifest that renders against the wrong lines.
+- Regenerating a manifest no longer loses recorded findings or checkmarks.
+- The published `.vsix` no longer carries compiled test output.
+
 ## [0.7.3] - 2026-07-17
 
 ### Added
@@ -93,6 +130,7 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Skill installer: the extension bundles the chapter-review skill and installs
   it into your coding agent, consent-gated.
 
+[0.8.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.8.0
 [0.7.3]: https://github.com/kevinboss/chapter-review/releases/tag/v0.7.3
 [0.7.2]: https://github.com/kevinboss/chapter-review/releases/tag/v0.7.2
 [0.7.1]: https://github.com/kevinboss/chapter-review/releases/tag/v0.7.1
