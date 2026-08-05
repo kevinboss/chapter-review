@@ -55,7 +55,7 @@
   ],
   "issues": [
     {
-      "id": "iss-1",
+      "id": "iss-2.1",
       "path": "src/auth/oidc.ts",
       "chapterId": "ch-2",
       "severity": "high",

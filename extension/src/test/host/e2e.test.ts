@@ -118,7 +118,7 @@ suite("CLI and extension over the same files", () => {
       // parseManifest is the extension's own gate; if the CLI's output shape
       // ever drifts from src/model.ts, this is where it shows.
       const provider = await providerFor(fx, readManifestFromDisk(fx));
-      assert.deepEqual(titles(provider), ["edit a top", "edit a bottom and b"]);
+      assert.deepEqual(titles(provider), ["1 · edit a top", "2 · edit a bottom and b"]);
     }));
 
   test("a finding recorded by the CLI shows up under its chapter", () =>
@@ -128,12 +128,15 @@ suite("CLI and extension over the same files", () => {
 
       const onDisk = readManifestFromDisk(fx);
       assert.equal(onDisk.issues?.[0].chapterId, "ch-2", "the CLI infers the owning chapter");
+      assert.equal(onDisk.issues[0].id, "iss-2.1", "and numbers the finding in that chapter");
 
       const provider = await providerFor(fx, onDisk);
       const children = provider.getChildren(provider.getChildren()[1]);
-      assert.ok(
-        children.some((n) => n.kind === "issue" || n.kind === "issuesRoot"),
-        "the extension should render the CLI's finding"
+      const issues = children.filter((n) => n.kind === "issue");
+      assert.deepEqual(
+        issues.map((n) => labelOf(provider.getTreeItem(n))),
+        ["2.1 · no guard"],
+        "the extension should render the CLI's finding under the number the CLI gave it"
       );
     }));
 
@@ -222,7 +225,7 @@ suite("CLI and extension over the same files", () => {
           ],
         })
       );
-      assert.match(out, /followed rename iss-1: b\.txt -> c\.txt/);
+      assert.match(out, /followed rename iss-2\.1: b\.txt -> c\.txt/);
 
       const onDisk = readManifestFromDisk(fx);
       assert.equal(onDisk.issues?.[0].path, "c.txt");

@@ -51,13 +51,14 @@
     },
     "issues": {
       "type": "array",
-      "description": "Per-chapter review findings the chapter-review skill noticed and wants to surface; the extension displays them. Authored by the skill while it reviews the diff (and added to on request during follow-up); durable: the skill MUST carry this array across regeneration (re-mapping each issue's chapterId to the chapter that owns its path/hunk in the new partition), never dropping findings. Optional; absent means none yet.",
+      "description": "Per-chapter review findings the chapter-review skill noticed and wants to surface; the extension displays them. Authored by the skill while it reviews the diff (and added to on request during follow-up); durable: the skill MUST carry this array across regeneration (re-mapping each issue's chapterId to the chapter that owns its path/hunk in the new partition, and renumbering its id into that chapter's sequence when the owner changes), never dropping findings. Optional; absent means none yet.",
       "items": { "$ref": "#/definitions/issue" }
     },
     "issueSeq": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Highest iss-N number ever allocated. Owned by `chapter-review issue`; never author it. Retained when a finding is removed so its id is never reused by a later `issue add` — findings get quoted into PR comments and chat, where a recycled id would point at a different problem.",
+      "type": "object",
+      "description": "Highest number ever allocated in each chapter's issue sequence, keyed by the chapter number an id carries (\"1\" for ch-1, \"0\" for findings with no chapter). Owned by `chapter-review issue`; never author it. Retained when a finding is removed, or when one is renumbered into another chapter, so an id is never reused by a later `issue add` — findings get quoted into PR comments and chat, where a recycled id would point at a different problem.",
+      "propertyNames": { "pattern": "^(0|[1-9][0-9]*)$" },
+      "additionalProperties": { "type": "integer", "minimum": 1 },
       "$comment": "Absent means no finding has ever been added."
     }
   },
@@ -69,8 +70,8 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^iss-[0-9]+$",
-          "description": "Stable issue ID, unique within the manifest. Unlike chapter IDs, these persist across regeneration."
+          "pattern": "^iss-[0-9]+\\.[1-9][0-9]*$",
+          "description": "Issue ID, unique within the manifest: iss-<chapter number>.<number within that chapter>, so iss-2.1 is the first finding in ch-2 and 0 is the sequence for findings with no chapter. The chapter part MUST match chapterId. A finding that changes chapter is renumbered into the new chapter's sequence; otherwise it keeps its id, across regeneration included."
         },
         "path": {
           "$ref": "#/definitions/path",
@@ -83,8 +84,8 @@
         },
         "chapterId": {
           "type": "string",
-          "pattern": "^ch-[0-9]+$",
-          "description": "Soft grouping: the chapter it was noted under. Positional, so treat path(+hunk) as the real key."
+          "pattern": "^ch-[1-9][0-9]*$",
+          "description": "Soft grouping: the chapter it was noted under. Positional, so treat path(+hunk) as the real key. Absent means no chapter owns it (a quarantined path), which numbers the finding iss-0.<number>."
         },
         "severity": { "enum": ["critical", "high", "low"] },
         "note": {
@@ -114,8 +115,8 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^ch-[0-9]+$",
-          "description": "Positional ID, stable within one generation only."
+          "pattern": "^ch-[1-9][0-9]*$",
+          "description": "Positional ID, numbered from 1 (0 is reserved: it is the issue sequence for findings with no chapter). Stable within one generation only."
         },
         "title": {
           "type": "string",

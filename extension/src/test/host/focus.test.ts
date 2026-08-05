@@ -56,11 +56,11 @@ suite("focus store", () => {
     withFixture(async (fx) => {
       const store = new FocusStore(vscode.Uri.file(fx.gitDir));
       await store.write({ path: "a.txt", chapterId: "ch-1" });
-      await store.write({ path: "b.txt", issueId: "iss-2" });
+      await store.write({ path: "b.txt", issueId: "iss-2.1" });
 
       const written = readFocus(fx);
       assert.equal(written.path, "b.txt");
-      assert.equal(written.issueId, "iss-2");
+      assert.equal(written.issueId, "iss-2.1");
       assert.equal(written.chapterId, undefined, "a fresh click replaces the pointer");
     }));
 });
@@ -92,13 +92,13 @@ suite("focusForNode", () => {
   test("an issue carries its id, so the skill can look the finding up", () => {
     const node: Node = {
       kind: "issue",
-      issue: { id: "iss-3", path: "b.txt", chapterId: "ch-2", severity: "low", note: "x", hunk },
+      issue: { id: "iss-2.3", path: "b.txt", chapterId: "ch-2", severity: "low", note: "x", hunk },
     };
     assert.deepEqual(focusForNode(node), {
       path: "b.txt",
       line: 7,
       chapterId: "ch-2",
-      issueId: "iss-3",
+      issueId: "iss-2.3",
     });
   });
 

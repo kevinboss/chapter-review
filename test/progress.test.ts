@@ -84,7 +84,9 @@ test("a rename carries findings and checkmarks to the new path", () => {
     ];
     const r = cli(["write"], { cwd: repo.dir, input: draft(repo, renamed) });
     assert.equal(r.code, 0, r.all);
-    assert.match(r.out, /followed rename iss-1: b\.txt -> c\.txt/);
+    assert.match(r.out, /followed rename iss-2\.1: b\.txt -> c\.txt/);
+    // Same chapter on both sides of the rename, so the number stays put.
+    assert.doesNotMatch(r.out, /renumbered/);
     assert.doesNotMatch(r.out, /pruned/);
 
     const issue = repo.readManifest().issues?.[0];
@@ -121,6 +123,70 @@ test("a finding's hunk is re-keyed onto the range that now covers it", () => {
     // so it survives every later regeneration pointing at the wrong lines.
     const { hunk } = repo.readManifest().issues?.[0] ?? {};
     assert.deepEqual(hunk, { oldStart: 5, oldLines: 1, newStart: 7, newLines: 1 });
+  });
+});
+
+test("a re-partition that re-homes a finding renumbers it, and says so", () => {
+  withWrittenRepo((repo) => {
+    // b.txt starts in ch-2, so the finding on it is iss-2.1.
+    cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "keep me"], { cwd: repo.dir });
+    assert.equal(repo.readManifest().issues?.[0].id, "iss-2.1");
+
+    // Same diff, b.txt regrouped under ch-1. The finding goes with it, and its
+    // number counts in ch-1's sequence: an iss-2.1 under chapter one is the
+    // mismatch chapter-scoped ids exist to rule out.
+    const regrouped: Chapter[] = [
+      {
+        id: "ch-1",
+        title: "edit a top + b",
+        files: [
+          { path: "a.txt", status: "modified", hunks: [{ oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 }] },
+          { path: "b.txt", status: "modified" },
+        ],
+      },
+      {
+        id: "ch-2",
+        title: "edit a bottom",
+        files: [{ path: "a.txt", status: "modified", hunks: [{ oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 }] }],
+      },
+    ];
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, regrouped) });
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /renumbered iss-2\.1 -> iss-1\.1 \(ch-1\)/);
+
+    const issue = repo.readManifest().issues?.[0];
+    assert.equal(issue?.id, "iss-1.1");
+    assert.equal(issue.chapterId, "ch-1");
+    // Both numbers stay retired: the vacated one may be quoted in a PR comment.
+    assert.deepEqual(repo.readManifest().issueSeq, { "1": 1, "2": 1 });
+    const next = cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "another"], { cwd: repo.dir });
+    assert.match(next.out, /Added iss-1\.2\b/);
+  });
+});
+
+test("a finding whose path is quarantined moves into the chapter-0 sequence", () => {
+  withWrittenRepo((repo) => {
+    cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "keep me"], { cwd: repo.dir });
+    assert.equal(repo.readManifest().issues?.[0].id, "iss-2.1");
+
+    // b.txt is re-read as noise, so no chapter owns the finding any more. It is
+    // renumbered into the sequence the extension shows under its Issues row.
+    const quarantined: Chapter[] = [
+      OK_CHAPTERS[0],
+      { ...OK_CHAPTERS[1], files: [OK_CHAPTERS[1].files[0]] },
+    ];
+    const r = cli(["write"], {
+      cwd: repo.dir,
+      input: draft(repo, quarantined, {
+        unassigned: [{ path: "b.txt", status: "modified", reason: "generated" }],
+      }),
+    });
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /renumbered iss-2\.1 -> iss-0\.1 \(no chapter\)/);
+
+    const issue = repo.readManifest().issues?.[0];
+    assert.equal(issue?.id, "iss-0.1");
+    assert.ok(!Object.hasOwn(issue, "chapterId"), "no chapter owns a quarantined path");
   });
 });
 
@@ -199,7 +265,7 @@ test("a path that genuinely leaves the diff is still pruned", () => {
     const withoutB: Chapter[] = [OK_CHAPTERS[0], { ...OK_CHAPTERS[1], files: [OK_CHAPTERS[1].files[0]] }];
     const r = cli(["write"], { cwd: repo.dir, input: draft(repo, withoutB) });
     assert.equal(r.code, 0, r.all);
-    assert.match(r.out, /pruned 1 \(iss-1\)/);
+    assert.match(r.out, /pruned 1 \(iss-2\.1\)/);
   });
 });
 

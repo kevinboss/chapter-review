@@ -56,7 +56,7 @@ test("write refuses an overlapping partition", () => {
 
 test("write refuses a draft carrying issues or reviewed", () => {
   withRepo((repo) => {
-    const withIssues = cli(["write"], { cwd: repo.dir, input: draft(repo, OK_CHAPTERS, { issues: [{ id: "iss-1", path: "b.txt", severity: "low", note: "x" }] }) });
+    const withIssues = cli(["write"], { cwd: repo.dir, input: draft(repo, OK_CHAPTERS, { issues: [{ id: "iss-0.1", path: "b.txt", severity: "low", note: "x" }] }) });
     assert.equal(withIssues.code, 1);
     assert.match(withIssues.err, /partition only/);
     const withReviewed = cli(["write"], { cwd: repo.dir, input: draft(repo, OK_CHAPTERS, { reviewed: [{ path: "b.txt", digest: "aa11" }] }) });

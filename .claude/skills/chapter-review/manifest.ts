@@ -103,6 +103,48 @@ function backup(dest: string): void {
 }
 
 /**
+ * Write `doc` as JSON to `dest` via a temp file and a rename, so a reader never
+ * sees a half-file. Both documents this module owns go out this way; `what` names
+ * the one at hand for the failure message, and `beforeRename` is the last moment
+ * to touch `dest` while it still holds the old bytes.
+ *
+ * Not in util.ts: that module keeps fs out on purpose (`tryReadJson` takes a
+ * thunk for exactly that reason), so an fs-bound writer belongs beside the two
+ * callers instead.
+ */
+function writeJsonFile(
+  dest: string,
+  doc: unknown,
+  what: string,
+  beforeRename?: () => void
+): void {
+  // Per-process temp name, not a fixed `${dest}.tmp`. With a shared name, two
+  // concurrent invocations open the same inode; whichever renames first turns
+  // that inode INTO the destination, so the other is still writing into the live
+  // file — readers see truncated or zero-length JSON, and the loser's rename
+  // fails with ENOENT. A unique name also means a pre-created symlink at the
+  // predictable path can no longer redirect the write.
+  const tmp = `${dest}.${process.pid.toString(36)}-${process.hrtime.bigint().toString(36)}.tmp`;
+  try {
+    mkdirSync(path.dirname(dest), { recursive: true });
+    // "wx" refuses to follow or clobber anything already at the temp path.
+    writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", { encoding: "utf8", flag: "wx" });
+    beforeRename?.();
+    renameSync(tmp, dest);
+  } catch (e) {
+    // Best-effort cleanup: if the temp path is itself the problem (its parent is
+    // a file, say) rmSync throws, and an exception here would replace the real
+    // diagnosis with a stack trace.
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      /* nothing useful to do */
+    }
+    die(`chapter-review: could not write ${what} (${dest}): ${errorMessage(e)}`);
+  }
+}
+
+/**
  * Validate then write the manifest, via a temp file and rename so the
  * extension's watcher never sees a half-file. An invalid manifest is refused,
  * never written. `onOk` runs with the validator's stats and the written path.
@@ -118,30 +160,9 @@ export function installManifest(
     process.exit(1);
   }
   const dest = manifestPath();
-  // Per-process temp name, not a fixed `${dest}.tmp`. With a shared name, two
-  // concurrent invocations open the same inode; whichever renames first turns
-  // that inode INTO chapters.json, so the other is still writing into the live
-  // file — readers see truncated or zero-length JSON, and the loser's rename
-  // fails with ENOENT. A unique name also means a pre-created symlink at the
-  // predictable path can no longer redirect the write.
-  const tmp = `${dest}.${process.pid.toString(36)}-${process.hrtime.bigint().toString(36)}.tmp`;
-  try {
-    mkdirSync(path.dirname(dest), { recursive: true });
-    // "wx" refuses to follow or clobber anything already at the temp path.
-    writeFileSync(tmp, JSON.stringify(manifest, null, 2) + "\n", { encoding: "utf8", flag: "wx" });
-    backup(dest);
-    renameSync(tmp, dest);
-  } catch (e) {
-    // Best-effort cleanup: if the temp path is itself the problem (its parent is
-    // a file, say) rmSync throws, and an exception here would replace the real
-    // diagnosis with a stack trace.
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      /* nothing useful to do */
-    }
-    die(`chapter-review: could not write the manifest (${dest}): ${errorMessage(e)}`);
-  }
+  // Backed up as late as possible: after the new bytes are safely in the temp
+  // file, and while dest still holds the old ones.
+  writeJsonFile(dest, manifest, "the manifest", () => { backup(dest); });
   onOk(result.stats, dest);
 }
 
@@ -174,6 +195,15 @@ export function hunkEquals(a?: Hunk, b?: Hunk): boolean {
 /** Every file entry, across chapters and unassigned. */
 export function allEntries(manifest: Manifest): FileEntry[] {
   return [...manifest.chapters.flatMap((ch) => ch.files), ...manifest.unassigned];
+}
+
+/**
+ * The manifest's findings, empty when it holds none. `issues` is optional and
+ * absent means zero, so every caller was spelling that out for itself, in two
+ * different ways.
+ */
+export function issuesOf(manifest: Manifest | null | undefined): Issue[] {
+  return manifest?.issues ?? [];
 }
 
 /** Does `p` appear in any chapter or in unassigned? */
@@ -260,15 +290,22 @@ export function ownerChapterId(
  * the range it was anchored to, and a stale anchor sends the extension to the
  * wrong lines. Left alone it never self-corrects — a coordinate a couple of
  * lines out survives every later regeneration, since nothing else touches it.
+ *
+ * A finding that lands in a different chapter is renumbered into that chapter's
+ * sequence, because its id counts there: keeping the old number would leave an
+ * `iss-1.2` filed under chapter three, which is the mismatch chapter-scoped ids
+ * exist to rule out. Its old number stays retired.
  */
 export function carryIssues(
   oldIssues: Issue[],
   newManifest: Manifest,
   prior?: Manifest | null
-): { kept: Issue[]; pruned: string[]; moved: string[] } {
+): { kept: Issue[]; pruned: string[]; moved: string[]; renumbered: string[] } {
   const kept: Issue[] = [];
   const pruned: string[] = [];
   const moved: string[] = [];
+  const renumbered: string[] = [];
+  const allocate = issueIdAllocator(issueHighWater(prior, oldIssues));
   for (const issue of oldIssues) {
     const path = currentPathFor(newManifest, issue.path, prior);
     if (path === undefined) {
@@ -278,30 +315,90 @@ export function carryIssues(
     if (path !== issue.path) moved.push(`${issue.id}: ${issue.path} -> ${path}`);
     const hunk = issue.hunk === undefined ? undefined : rekey(newManifest, path, issue.hunk);
     const chapterId = ownerChapterId(newManifest, path, hunk, issue.chapterId);
-    kept.push(withoutUndefined({ ...issue, path, hunk, chapterId }));
+    const sameChapter = issueBucket(chapterId) === issueBucket(issue.chapterId);
+    const id = sameChapter ? issue.id : allocate(chapterId);
+    if (!sameChapter) {
+      renumbered.push(`${issue.id} -> ${id} (${chapterId ?? "no chapter"})`);
+    }
+    kept.push(withoutUndefined({ ...issue, id, path, hunk, chapterId }));
   }
-  return { kept, pruned, moved };
+  return { kept, pruned, moved, renumbered };
+}
+
+/** An issue id: the number of the chapter it sits in, then its number there. */
+const ISSUE_ID = /^iss-([0-9]+)\.([0-9]+)$/;
+
+/**
+ * Which sequence an issue id counts in: the number of its owning chapter, or 0
+ * when it has none. Findings are numbered inside their chapter so the id says
+ * where the finding is: `1.2` read off the extension's tree is the second
+ * finding in chapter one. A branch-wide counter said only how many findings had
+ * come before it, which is how an `iss-9` ended up in chapter one.
+ */
+export function issueBucket(chapterId: string | undefined): string {
+  const m = /^ch-([0-9]+)$/.exec(chapterId ?? "");
+  return m ? m[1] : "0";
 }
 
 /**
- * The highest `iss-N` ever allocated: the recorded mark, or the largest live id
- * if that is higher (a manifest predating issueSeq). Deriving it from the live
+ * The highest number ever allocated in each chapter's sequence: the recorded
+ * marks, raised by any live id that runs past them. Deriving it from the live
  * ids alone would recycle the number of a removed finding.
  */
 export function issueHighWater(
   manifest: Manifest | null | undefined,
   issues: Issue[]
-): number {
-  const recorded = typeof manifest?.issueSeq === "number" ? manifest.issueSeq : 0;
-  return issues.reduce((m, i) => {
-    const n = Number((/^iss-(\d+)$/.exec(i.id) ?? [])[1]);
-    return Number.isInteger(n) && n > m ? n : m;
-  }, recorded);
+): Map<string, number> {
+  const out = new Map<string, number>();
+  const bump = (bucket: string, n: number): void => {
+    if (Number.isInteger(n) && n > (out.get(bucket) ?? 0)) out.set(bucket, n);
+  };
+  for (const [bucket, n] of Object.entries(manifest?.issueSeq ?? {})) bump(bucket, n);
+  for (const issue of issues) {
+    const m = ISSUE_ID.exec(issue.id);
+    if (m) bump(m[1], Number(m[2]));
+  }
+  return out;
 }
 
-/** The next free `iss-N` id, one past the highest number ever allocated. */
-export function nextIssueId(manifest: Manifest | undefined, issues: Issue[]): string {
-  return `iss-${issueHighWater(manifest, issues) + 1}`;
+/**
+ * Hand out ids from `seq`, advancing it as each is taken. A regeneration can
+ * re-home several findings into one chapter in a single pass, and a fresh
+ * highest-plus-one for each would give them all the same id.
+ */
+export function issueIdAllocator(
+  seq: Map<string, number>
+): (chapterId: string | undefined) => string {
+  return (chapterId) => {
+    const bucket = issueBucket(chapterId);
+    const n = (seq.get(bucket) ?? 0) + 1;
+    seq.set(bucket, n);
+    return `iss-${bucket}.${n}`;
+  };
+}
+
+/** The next free id in the sequence of the chapter the finding belongs to. */
+export function nextIssueId(
+  manifest: Manifest | undefined,
+  issues: Issue[],
+  chapterId: string | undefined
+): string {
+  return issueIdAllocator(issueHighWater(manifest, issues))(chapterId);
+}
+
+/**
+ * The high-water marks as the manifest stores them, lowest chapter first so the
+ * file diffs line by line. Undefined when nothing has ever been allocated, which
+ * is the state the field is absent for: returning `{}` made every caller repeat
+ * the same emptiness test before assigning.
+ */
+export function storedIssueSeq(
+  manifest: Manifest | null | undefined,
+  issues: Issue[]
+): Record<string, number> | undefined {
+  const seq = [...issueHighWater(manifest, issues)].filter(([, n]) => n > 0);
+  if (seq.length === 0) return undefined;
+  return Object.fromEntries(seq.sort(([a], [b]) => Number(a) - Number(b)));
 }
 
 /** Read the reviewer's checkmarks from progress.json. */
@@ -334,21 +431,10 @@ const isReviewedUnit = (u: unknown): u is ReviewedUnit =>
  * sees a half-file; no lock, because nothing else writes this document.
  */
 export function writeProgress(reviewed: ReviewedUnit[]): void {
-  const dest = progressPath();
   const doc: Progress = { version: 1, reviewed };
-  const tmp = `${dest}.${process.pid.toString(36)}-${process.hrtime.bigint().toString(36)}.tmp`;
-  try {
-    mkdirSync(path.dirname(dest), { recursive: true });
-    writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", { encoding: "utf8", flag: "wx" });
-    renameSync(tmp, dest);
-  } catch (e) {
-    try {
-      rmSync(tmp, { force: true });
-    } catch {
-      /* nothing useful to do */
-    }
-    die(`chapter-review: could not write review progress (${dest}): ${errorMessage(e)}`);
-  }
+  // No backup hook: this document is one line per checkmark, rebuilt by the
+  // extension as the reviewer ticks, so there is nothing here to recover.
+  writeJsonFile(progressPath(), doc, "review progress");
 }
 
 /**
@@ -449,8 +535,8 @@ export function withIssues(manifest: Manifest, issues: Issue[]): Manifest {
   };
   if (issues.length > 0) out.issues = issues.map(canonicalIssue);
   // Persisted so the mark survives removal of the finding that set it.
-  const seq = issueHighWater(manifest, issues);
-  if (seq > 0) out.issueSeq = seq;
+  const seq = storedIssueSeq(manifest, issues);
+  if (seq) out.issueSeq = seq;
   // `reviewed` is deliberately not carried through: it lives in progress.json,
   // and re-emitting it here would recreate the shared-document race.
   return out;

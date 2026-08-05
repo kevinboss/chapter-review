@@ -155,8 +155,9 @@ test("issue list shows the hunk a finding is pinned to", () => {
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "whole file"], { cwd: repo.dir });
 
     const { out } = cli(["issue", "list"], { cwd: repo.dir });
-    assert.match(out, /iss-1.*a\.txt @@ -5,1 \+5,1 @@ \(ch-2\)/);
-    assert.match(out, /iss-2.*b\.txt \(ch-2\)/);
+    // Both findings sit in ch-2, so they take that chapter's sequence in turn.
+    assert.match(out, /iss-2\.1.*a\.txt @@ -5,1 \+5,1 @@ \(ch-2\)/);
+    assert.match(out, /iss-2\.2.*b\.txt \(ch-2\)/);
     assert.doesNotMatch(out, /b\.txt @@/);
   });
 });
@@ -166,13 +167,13 @@ test("issue list shows the hunk a finding is pinned to", () => {
 test("issue lifecycle: set / verify / unverify / resolve / reopen / rm", () => {
   withWrittenRepo((repo) => {
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "x"], { cwd: repo.dir });
-    assert.match(cli(["issue", "set", "iss-1", "--confidence", "verified"], { cwd: repo.dir }).out, /Updated iss-1/);
-    assert.match(cli(["issue", "verify", "iss-1"], { cwd: repo.dir }).out, /Marked iss-1 verified/);
-    assert.match(cli(["issue", "unverify", "iss-1"], { cwd: repo.dir }).out, /Marked iss-1 suspected/);
-    assert.match(cli(["issue", "resolve", "iss-1"], { cwd: repo.dir }).out, /Resolved iss-1/);
-    assert.match(cli(["issue", "reopen", "iss-1"], { cwd: repo.dir }).out, /Reopened iss-1/);
-    assert.match(cli(["issue", "rm", "iss-1"], { cwd: repo.dir }).out, /Removed iss-1/);
-    assert.doesNotMatch(cli(["issue", "list"], { cwd: repo.dir }).out, /^iss-1\b/m);
+    assert.match(cli(["issue", "set", "iss-2.1", "--confidence", "verified"], { cwd: repo.dir }).out, /Updated iss-2\.1/);
+    assert.match(cli(["issue", "verify", "iss-2.1"], { cwd: repo.dir }).out, /Marked iss-2\.1 verified/);
+    assert.match(cli(["issue", "unverify", "iss-2.1"], { cwd: repo.dir }).out, /Marked iss-2\.1 suspected/);
+    assert.match(cli(["issue", "resolve", "iss-2.1"], { cwd: repo.dir }).out, /Resolved iss-2\.1/);
+    assert.match(cli(["issue", "reopen", "iss-2.1"], { cwd: repo.dir }).out, /Reopened iss-2\.1/);
+    assert.match(cli(["issue", "rm", "iss-2.1"], { cwd: repo.dir }).out, /Removed iss-2\.1/);
+    assert.doesNotMatch(cli(["issue", "list"], { cwd: repo.dir }).out, /^iss-2\.1\b/m);
   });
 });
 
@@ -180,11 +181,11 @@ test("issue set refuses a path that is not in the diff, and a call with no field
   withWrittenRepo((repo) => {
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "real"], { cwd: repo.dir });
 
-    const moved = cli(["issue", "set", "iss-1", "--path", "typo.txt"], { cwd: repo.dir });
+    const moved = cli(["issue", "set", "iss-2.1", "--path", "typo.txt"], { cwd: repo.dir });
     assert.equal(moved.code, 1, moved.all);
     assert.equal(repo.readManifest().issues?.[0].path, "b.txt", "the finding must not move");
 
-    const empty = cli(["issue", "set", "iss-1"], { cwd: repo.dir });
+    const empty = cli(["issue", "set", "iss-2.1"], { cwd: repo.dir });
     assert.equal(empty.code, 1, empty.all);
     assert.match(empty.err, /needs at least one field to change/);
   });
@@ -196,7 +197,7 @@ test("issue set drops a hunk that belonged to the path it moved off, and says so
       ["issue", "add", "--path", "a.txt", "--hunk", "5,1,5,1", "--severity", "low", "--note", "x"],
       { cwd: repo.dir }
     );
-    const r = cli(["issue", "set", "iss-1", "--path", "b.txt"], { cwd: repo.dir });
+    const r = cli(["issue", "set", "iss-2.1", "--path", "b.txt"], { cwd: repo.dir });
     assert.equal(r.code, 0, r.all);
     const issue = repo.readManifest().issues?.[0];
     assert.equal(issue?.path, "b.txt");
@@ -246,19 +247,83 @@ test("a removed issue id is retired, not handed out again", () => {
   withWrittenRepo((repo) => {
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "one"], { cwd: repo.dir });
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "two"], { cwd: repo.dir });
-    const rm = cli(["issue", "rm", "iss-2"], { cwd: repo.dir });
+    const rm = cli(["issue", "rm", "iss-2.2"], { cwd: repo.dir });
     assert.equal(rm.code, 0, rm.all);
 
     const add = cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "three"], { cwd: repo.dir });
     assert.equal(add.code, 0, add.all);
-    assert.match(add.out, /Added iss-3\b/);
+    assert.match(add.out, /Added iss-2\.3\b/);
 
     // And the mark survives regeneration, including for a pruned id.
-    cli(["issue", "rm", "iss-3"], { cwd: repo.dir });
+    cli(["issue", "rm", "iss-2.3"], { cwd: repo.dir });
     const w = cli(["write"], { cwd: repo.dir, input: draft(repo, OK_CHAPTERS) });
     assert.equal(w.code, 0, w.all);
     const after = cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "four"], { cwd: repo.dir });
-    assert.match(after.out, /Added iss-4\b/);
+    assert.match(after.out, /Added iss-2\.4\b/);
+  });
+});
+
+test("findings are numbered inside their chapter, so the number names the chapter", () => {
+  withWrittenRepo((repo) => {
+    // a.txt is split: hunk 2 belongs to ch-1, hunk 5 to ch-2. b.txt is ch-2's.
+    const top = cli(
+      ["issue", "add", "--path", "a.txt", "--hunk", "2,1,2,1", "--severity", "low", "--note", "top"],
+      { cwd: repo.dir }
+    );
+    assert.match(top.out, /Added iss-1\.1 .* in ch-1\./);
+    const bottom = cli(
+      ["issue", "add", "--path", "a.txt", "--hunk", "5,1,5,1", "--severity", "low", "--note", "bottom"],
+      { cwd: repo.dir }
+    );
+    assert.match(bottom.out, /Added iss-2\.1 .* in ch-2\./);
+    // The two chapters count separately: a global counter made this one iss-3.
+    const second = cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "b"], { cwd: repo.dir });
+    assert.match(second.out, /Added iss-2\.2 .* in ch-2\./);
+  });
+});
+
+test("a finding with no owning chapter is numbered in the chapter-0 sequence", () => {
+  withRepo((repo) => {
+    const chapters: Chapter[] = [
+      { id: "ch-1", title: "edit a", files: [{ path: "a.txt", status: "modified" }] },
+    ];
+    const w = cli(["write"], {
+      cwd: repo.dir,
+      input: draft(repo, chapters, {
+        unassigned: [{ path: "b.txt", status: "modified", reason: "generated" }],
+      }),
+    });
+    assert.equal(w.code, 0, w.all);
+    const add = cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "x"], { cwd: repo.dir });
+    assert.match(add.out, /Added iss-0\.1\b/);
+    assert.equal(repo.readManifest().issueSeq?.["0"], 1);
+  });
+});
+
+test("moving a finding to another chapter renumbers it, retiring both ids", () => {
+  withWrittenRepo((repo) => {
+    cli(
+      ["issue", "add", "--path", "a.txt", "--hunk", "2,1,2,1", "--severity", "low", "--note", "top"],
+      { cwd: repo.dir }
+    );
+    // Re-anchoring to ch-2's hunk moves the finding, so its number moves with it:
+    // an iss-1.1 sitting under chapter two is the confusion this rules out.
+    const moved = cli(["issue", "set", "iss-1.1", "--hunk", "5,1,5,1"], { cwd: repo.dir });
+    assert.equal(moved.code, 0, moved.all);
+    assert.match(moved.out, /It is now iss-2\.1/);
+    const issue = repo.readManifest().issues?.[0];
+    assert.equal(issue?.id, "iss-2.1");
+    assert.equal(issue.chapterId, "ch-2");
+
+    // Neither number is handed out again: the vacated ch-1 slot least of all,
+    // since "1.1" may already be quoted in a PR comment.
+    const next = cli(
+      ["issue", "add", "--path", "a.txt", "--hunk", "2,1,2,1", "--severity", "low", "--note", "another"],
+      { cwd: repo.dir }
+    );
+    assert.match(next.out, /Added iss-1\.2\b/);
+    const again = cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "more"], { cwd: repo.dir });
+    assert.match(again.out, /Added iss-2\.2\b/);
   });
 });
 
@@ -267,17 +332,17 @@ test("default status and confidence are stored one way, however they were set", 
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "x"], { cwd: repo.dir });
     // A round trip must not leave `"status": "open"` where an untouched finding
     // has no status key at all.
-    cli(["issue", "resolve", "iss-1"], { cwd: repo.dir });
-    cli(["issue", "reopen", "iss-1"], { cwd: repo.dir });
-    cli(["issue", "verify", "iss-1"], { cwd: repo.dir });
-    cli(["issue", "unverify", "iss-1"], { cwd: repo.dir });
+    cli(["issue", "resolve", "iss-2.1"], { cwd: repo.dir });
+    cli(["issue", "reopen", "iss-2.1"], { cwd: repo.dir });
+    cli(["issue", "verify", "iss-2.1"], { cwd: repo.dir });
+    cli(["issue", "unverify", "iss-2.1"], { cwd: repo.dir });
 
     const issue = repo.readManifest().issues?.[0];
     assert.ok(issue);
     assert.ok(!Object.hasOwn(issue, "status"), "an open finding must not store a status");
     assert.ok(!Object.hasOwn(issue, "confidence"), "a suspected finding must not store a confidence");
     // Resolved is not the default, so it is still written.
-    cli(["issue", "resolve", "iss-1"], { cwd: repo.dir });
+    cli(["issue", "resolve", "iss-2.1"], { cwd: repo.dir });
     assert.equal(repo.readManifest().issues?.[0].status, "resolved");
   });
 });

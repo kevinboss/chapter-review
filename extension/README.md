@@ -43,6 +43,7 @@ If the view says "No chapter manifest found", the skill hasn't generated one for
 ## Features
 
 - **Chapters** view in its own activity-bar container: chapters → files → hunks, with an Unassigned bucket for quarantined noise (lockfiles, generated code, autoformat).
+- Numbered rows: a chapter reads `2 · <title>` and its findings `2.1`, `2.2`, because findings are numbered inside their chapter. Say "chapter 2" or "2.1" to your agent rather than pasting a title, and the skill resolves it to `ch-2` or `iss-2.1`. The full id sits in the row's tooltip.
 - Tree/list toggle for the files inside a chapter, mirroring the native git views.
 - Chapter-scoped diffs: a file or hunk opens a diff showing only that chapter's changes, even when other chapters touch the same file. The cursor lands on the first changed line.
 - Review progress via native checkboxes on files and hunks, keyed by hunk position so it survives manifest regeneration for unchanged hunks. Ticking a chapter, folder or the Unassigned root completes every file beneath it in one step. Per-chapter counts plus an overall "N of M reviewed".
