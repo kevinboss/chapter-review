@@ -34,9 +34,11 @@ It re-pins `headSha`, `mergeBase` and `generatedAt` to the working tree it obser
 
 **Reading the report.** The summary opens with `Wrote <n> chapters across <n> files (<n> claims)`.
 A "claim" is one *enumerated hunk*, except that a whole-file entry (no `hunks` array) counts as exactly 1 however many hunks the diff holds for it; `unassigned` entries are claims too, and `files` counts distinct paths.
-The preserved-counts clauses (chapters kept, issues preserved, pruned, checkmarks carried, checkmarks dropped) are appended to that sentence **only when non-zero**, so on a first write it carries no clauses at all; their absence means zero, not a missing line. The lines below it (the destination path, the coverage verdict, the `pinned to HEAD …` pin) always print.
+The preserved-counts clauses (chapters kept, issues preserved, pruned, checkmarks carried, checkmarks dropped) are appended to that sentence **only when non-zero**, so on a first write it carries no clauses at all; their absence means zero, not a missing line.
+One clause among them is not a count: `dropped ch-N[, ch-M]` names the chapter ids the previous manifest had and this write does not, merged away or gone. The lines below it (the destination path, the coverage verdict, the `pinned to HEAD …` pin) always print.
 Read "checkmarks carried" as rows that survived path-pruning, not as units that still read as reviewed (see SKILL.md's Regenerating section). It is not a signal to go unchecking things.
 Two kinds of per-finding line follow, one per finding rather than counted: `followed rename <id>: <old path> -> <new path>` for a finding whose file moved, and `renumbered <old id> -> <new id> (<chapter>)` for one the new partition handed to another chapter. Relay the renumbered lines; the old id may be quoted somewhere the manifest can't reach.
+Both fire for one finding when its file was renamed *and* its chapter changed, and both name the id it arrived with, so the pair reads as one event on one finding rather than two findings that happen to share a number.
 
 ### issue
 
@@ -51,8 +53,11 @@ This second job works on a file claimed whole too: the partition enumerates no r
 A finding defaults to `confidence: suspected`; see SKILL.md step 7.
 `--path` must name a path the manifest holds, in a chapter or in `unassigned`; anything else is refused, because a finding outside the diff anchors to nothing the reviewer can open.
 Findings anchor to **chapters only**: `--chapter` takes `ch-<number>`, never `unassigned`.
+It must also name a chapter whose `files` hold `--path`, and any one of them will do for a split path.
+A chapter that holds none of the path is refused rather than stored: `chapterId` is read back off path(+hunk) on every `write`, so such a finding would be moved to the real owner and renumbered, in a line that looks exactly like one the branch caused.
 For a path split between a chapter and `unassigned`, the finding lands on the chapter-side owner (that split doesn't count as "spans several", so you get no ambiguity warning); a purely quarantined path has no owner, so the finding is recorded without a `chapterId` and the extension shows it outside any chapter.
 Don't file findings against quarantined noise: if a lockfile hunk is worth a finding, it wasn't noise.
+The command warns when you do it anyway (the path is quarantined, so the finding lands in the chapter-0 sequence) and records it regardless, the same way it warns about a duplicate.
 
 `chapter-review issue set <id> [flags]` / `resolve <id>` / `reopen <id>` / `verify <id>` / `unverify <id>` / `rm <id>` / `list` — revise findings in place.
 `verify`/`unverify` flip a finding's confidence (shorthand for `set <id> --confidence …`). No need to re-send the manifest.
@@ -60,6 +65,7 @@ Don't file findings against quarantined noise: if a lockfile hunk is worth a fin
 A `--hunk` must name a real range, copied exactly: one of the ranges the partition claims for that path, or, when the path is claimed whole, one of that file's `@@` hunks in the diff.
 `rm` retires the id rather than freeing it, so the next `add` never reuses a number you may already have quoted in a PR comment or report.
 A `set` that moves a finding to another chapter (via `--chapter`, or via a `--path`/`--hunk` another chapter owns) renumbers it into that chapter's sequence and prints the new id, since the number counts there; the old one is retired too.
+Reaching for `--hunk` to change chapters re-anchors the finding to that exact range as well, so the note can end up describing code the finding no longer points at; `set` says to check it. `--chapter` re-files without re-anchoring.
 
 ### uncheck
 

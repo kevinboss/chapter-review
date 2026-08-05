@@ -35,6 +35,38 @@ function requireRealChapter(manifest: Manifest, chapterId: string | undefined): 
 }
 
 /**
+ * Reject a --chapter that does not hold the path the finding anchors to. The
+ * pairing cannot survive: `chapterId` is read back off path(+hunk) on every
+ * `write`, so the finding is moved to the chapter that actually owns the file and
+ * renumbered, in a report line indistinguishable from one the branch caused. That
+ * makes it worse than the typo requireRealChapter already refuses, which at least
+ * stayed put.
+ *
+ * A path split across several chapters is what --chapter is *for*, so any one of
+ * its owners is accepted; only a chapter owning none of it is refused.
+ */
+function requireChapterOwnsPath(
+  manifest: Manifest,
+  p: string,
+  chapterId: string | undefined
+): void {
+  if (chapterId === undefined) return;
+  const chapter = manifest.chapters.find((ch) => ch.id === chapterId);
+  // A chapter no manifest has is requireRealChapter's error to report, not this one.
+  if (!chapter || chapter.files.some((f) => f.path === p)) return;
+  const owners = manifest.chapters.filter((c) => c.files.some((f) => f.path === p));
+  die(
+    `chapter-review: ${chapterId} does not hold ${p}, so a finding filed there would ` +
+      "not stay: `write` reads the owner back off the path and moves it, renumbering it.\n" +
+      (owners.length > 0
+        ? `  ${p} is in ${owners.map((o) => o.id).join(", ")}. Name one of those, ` +
+          "or pass --hunk to pin a range one of them owns."
+        : `  ${p} is quarantined in unassigned, so no chapter can own a finding on it. ` +
+          "Drop --chapter, or re-partition so a chapter holds the file.")
+  );
+}
+
+/**
  * Reject a --path the manifest does not hold, in a chapter or in unassigned.
  * Such a finding lands with no chapterId, which is indistinguishable from a
  * legitimately quarantined path, so a typo reads as intentional.
@@ -199,6 +231,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       requireRealPath(manifest, fieldPath);
       requireRealOldPath(manifest, fieldPath, fields.oldPath);
       requireRealHunk(manifest, fieldPath, fields.hunk);
+      requireChapterOwnsPath(manifest, fieldPath, fields.chapterId);
       // Warned, not refused: re-running a command is the usual cause, but two
       // findings can legitimately share a path and note if a reviewer wants them
       // tracked separately, so the caller decides.
@@ -232,6 +265,22 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
             `chapter-review: ${fields.path} spans ${owners.map((o) => o.id).join(", ")}; ` +
               `recorded in ${inferred} and anchored to the whole file. ` +
               `pass --chapter to choose, or --hunk to pin a range.`
+          );
+        }
+        // Nothing to infer from means the path is quarantined, and the guidance
+        // is not to file findings against noise. Said here because the add is
+        // where the decision happens: the confirmation line reads like any other,
+        // and only a later `issue list` shows the finding as unassigned.
+        const quarantined =
+          inferred === undefined
+            ? manifest.unassigned.find((f) => f.path === fieldPath)
+            : undefined;
+        if (quarantined) {
+          console.error(
+            `chapter-review: ${fieldPath} is quarantined as noise ` +
+              `(${quarantined.reason ?? "no reason recorded"}), so no chapter owns this ` +
+              "finding and it is numbered in the chapter-0 sequence. If the change there is " +
+              "worth a finding, it is not noise: partition it into a chapter instead."
           );
         }
       }
@@ -281,6 +330,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       requireRealChapter(manifest, updates.chapterId);
       requireRealPath(manifest, updates.path);
       requireRealOldPath(manifest, updates.path ?? issue.path, updates.oldPath);
+      requireChapterOwnsPath(manifest, updates.path ?? issue.path, updates.chapterId);
       // A range belongs to the file it was read from. Moving the finding to
       // another path used to keep the old coordinates, pinning it to lines the
       // new file may not even have; canonicalIssue drops the undefined key.
@@ -322,7 +372,14 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
               : ` It is now ${renumbered}: an id counts in its chapter's sequence.`) +
             (droppedHunk ? " Its hunk was cleared: a range does not carry to another file." : "") +
             // The note was written about the old anchor and nothing rewrites it.
-            (moved ? " Check the note still describes the new path." : "")
+            // A --hunk earns the same warning as a --path: reaching for it to move
+            // a finding between chapters re-anchors it as a side effect, leaving
+            // the note describing code the finding no longer points at.
+            (moved
+              ? " Check the note still describes the new path."
+              : updates.hunk === undefined
+                ? ""
+                : " Check the note still describes the range it now points at.")
         );
       });
       break;
