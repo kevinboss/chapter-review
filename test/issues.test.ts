@@ -297,6 +297,64 @@ test("a finding with no owning chapter is numbered in the chapter-0 sequence", (
     const add = cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "x"], { cwd: repo.dir });
     assert.match(add.out, /Added iss-0\.1\b/);
     assert.equal(repo.readManifest().issueSeq?.["0"], 1);
+    // Recorded, but not in silence: the confirmation reads like any other add, so
+    // without this nothing said the finding had landed on quarantined noise.
+    assert.match(add.err, /b\.txt is quarantined as noise \(generated\)/);
+    assert.match(add.err, /chapter-0 sequence/);
+
+    // And no chapter can be named for it, since none holds the path.
+    const forced = cli(
+      ["issue", "add", "--path", "b.txt", "--chapter", "ch-1", "--severity", "low", "--note", "y"],
+      { cwd: repo.dir }
+    );
+    assert.equal(forced.code, 1, forced.all);
+    assert.match(forced.err, /quarantined in unassigned/);
+  });
+});
+
+test("issue add and set refuse a chapter that does not hold the path", () => {
+  withWrittenRepo((repo) => {
+    // ch-1 holds only a.txt's top hunk; b.txt lives in ch-2 alone. Filing a b.txt
+    // finding under ch-1 used to be stored and then silently reverted by the next
+    // `write`, which reads the owner back off the path.
+    const add = cli(
+      ["issue", "add", "--path", "b.txt", "--chapter", "ch-1", "--severity", "low", "--note", "x"],
+      { cwd: repo.dir }
+    );
+    assert.equal(add.code, 1, add.all);
+    assert.match(add.err, /ch-1 does not hold b\.txt/);
+    assert.match(add.err, /b\.txt is in ch-2/);
+    assert.equal((repo.readManifest().issues ?? []).length, 0, "nothing should be recorded");
+
+    cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "x"], { cwd: repo.dir });
+    const set = cli(["issue", "set", "iss-2.1", "--chapter", "ch-1"], { cwd: repo.dir });
+    assert.equal(set.code, 1, set.all);
+    assert.match(set.err, /does not hold b\.txt/);
+    const issue = repo.readManifest().issues?.[0];
+    assert.equal(issue?.id, "iss-2.1", "the finding must not move");
+    assert.equal(issue.chapterId, "ch-2");
+
+    // A split path is what --chapter is for, so either of its owners is accepted.
+    const split = cli(
+      ["issue", "add", "--path", "a.txt", "--chapter", "ch-1", "--severity", "low", "--note", "top"],
+      { cwd: repo.dir }
+    );
+    assert.equal(split.code, 0, split.all);
+    assert.match(split.out, /Added iss-1\.1 .* in ch-1\./);
+  });
+});
+
+test("issue set says to re-read the note when a hunk re-anchors the finding", () => {
+  withWrittenRepo((repo) => {
+    cli(
+      ["issue", "add", "--path", "a.txt", "--hunk", "2,1,2,1", "--severity", "low", "--note", "top"],
+      { cwd: repo.dir }
+    );
+    // Reaching for --hunk to change chapters moves the anchor too, so the note
+    // can be left describing code the finding no longer points at.
+    const r = cli(["issue", "set", "iss-1.1", "--hunk", "5,1,5,1"], { cwd: repo.dir });
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /Check the note still describes the range it now points at/);
   });
 });
 
