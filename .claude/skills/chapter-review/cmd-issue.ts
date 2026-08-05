@@ -5,11 +5,13 @@ import {
   allEntries,
   hunkEquals,
   installManifest,
-  issueHighWater,
+  issueBucket,
+  issuesOf,
   nextIssueId,
   ownerChapterId,
   pathInManifest,
   readManifestOrDie,
+  storedIssueSeq,
   withIssues,
 } from "./manifest.ts";
 import type { Hunk, Issue, Manifest, ManifestStats } from "./types.ts";
@@ -116,7 +118,7 @@ function requireRealHunk(manifest: Manifest, p: string, hunk: Hunk | undefined):
 }
 
 function findIssue(manifest: Manifest, id: string): { issues: Issue[]; issue: Issue } {
-  const issues = Array.isArray(manifest.issues) ? manifest.issues : [];
+  const issues = issuesOf(manifest);
   const issue = issues.find((i) => i.id === id);
   if (!issue) die(`chapter-review: no issue "${id}" in the manifest.`);
   return { issues, issue };
@@ -170,7 +172,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
   // review yet.
   if (sub === "help" || sub === "--help" || sub === "-h") issueUsage(0);
   const manifest = readManifestOrDie();
-  const issues = Array.isArray(manifest.issues) ? manifest.issues : [];
+  const issues = issuesOf(manifest);
 
   switch (sub) {
     case "add": {
@@ -213,7 +215,6 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
             "adding a second finding. `issue rm` one of them if that was a re-run."
         );
       }
-      const id = nextIssueId(manifest, issues);
       // Infer the owning chapter from the path when not given. A --hunk picks
       // the chapter that owns that range; on an ambiguous split (path in >1
       // chapter, no hunk to match) we pick the first and say so.
@@ -236,6 +237,9 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       }
       const { severity, note } = fields;
       if (severity === undefined || note === undefined) return;
+      // Allocated once the owner is settled, because the number counts in that
+      // chapter's own sequence: the first finding in ch-2 is iss-2.1.
+      const id = nextIssueId(manifest, issues, fields.chapterId);
       const issue: Issue = {
         id,
         ...fields,
@@ -282,6 +286,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       // new file may not even have; canonicalIssue drops the undefined key.
       const droppedHunk =
         updates.path !== undefined && updates.hunk === undefined && issue.hunk !== undefined;
+      const oldBucket = issueBucket(issue.chapterId);
       Object.assign(issue, updates);
       if (droppedHunk) issue.hunk = undefined;
       requireRealHunk(manifest, issue.path, issue.hunk);
@@ -296,6 +301,14 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         // Undefined rather than removed: canonicalIssue drops the key on save.
         issue.chapterId = ownerChapterId(manifest, issue.path, issue.hunk, undefined);
       }
+      // A finding that changed chapter takes the next id in the new chapter's
+      // sequence, the same way `write` renumbers one a re-partition re-homes.
+      // Its old number is retained as that chapter's mark, so nothing reuses it.
+      const renumbered =
+        issueBucket(issue.chapterId) === oldBucket
+          ? undefined
+          : nextIssueId(manifest, issues, issue.chapterId);
+      if (renumbered !== undefined) issue.id = renumbered;
       saveIssues(manifest, issues, () => {
         // Name the state the move discarded. Silently dropping the range left
         // the finding anchored to a whole file with no sign it had been pinned,
@@ -304,6 +317,9 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         const moved = updates.path !== undefined;
         console.log(
           `Updated ${id}${where}.` +
+            (renumbered === undefined
+              ? ""
+              : ` It is now ${renumbered}: an id counts in its chapter's sequence.`) +
             (droppedHunk ? " Its hunk was cleared: a range does not carry to another file." : "") +
             // The note was written about the old anchor and nothing rewrites it.
             (moved ? " Check the note still describes the new path." : "")
@@ -338,7 +354,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       if (!id) die("chapter-review: issue rm needs an issue id.");
       findIssue(manifest, id); // errors if missing
       // Pinned before the removal, so dropping the highest id does not free it.
-      manifest.issueSeq = issueHighWater(manifest, issues);
+      manifest.issueSeq = storedIssueSeq(manifest, issues);
       saveIssues(manifest, issues.filter((i) => i.id !== id), () =>
         { console.log(`Removed ${id}. Its id is retired, not reused.`); }
       );

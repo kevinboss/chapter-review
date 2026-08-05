@@ -70,8 +70,12 @@ export interface Manifest {
   chapters: Chapter[];
   unassigned: FileEntry[];
   issues?: Issue[];
-  /** Highest `iss-N` ever allocated, so a removed finding's id is never reused. */
-  issueSeq?: number;
+  /**
+   * Highest number ever allocated in each chapter's issue sequence, keyed by the
+   * chapter number an id carries (`"0"` for findings with no chapter), so a
+   * removed finding's id is never reused.
+   */
+  issueSeq?: Record<string, number>;
 }
 
 export interface ManifestStats {

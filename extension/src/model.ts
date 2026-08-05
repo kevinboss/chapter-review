@@ -83,6 +83,27 @@ export function isOpen(issue: Issue): boolean {
 }
 
 /**
+ * The number a `ch-N` id carries, undefined if the id is not of that form. Shown
+ * on the chapter row so the reviewer can name a chapter to the agent without
+ * retyping its title.
+ */
+export function chapterNumber(id: string): string | undefined {
+  const m = /^ch-([0-9]+)$/.exec(id);
+  return m ? m[1] : undefined;
+}
+
+/**
+ * The number part of an `iss-<chapter>.<n>` id, undefined if the id is not of
+ * that form. Findings are numbered within their chapter, so this is what reads
+ * usefully on the row: "1.2" is the second finding in chapter one, and the
+ * `iss-` prefix is the same on every row.
+ */
+export function issueNumber(id: string): string | undefined {
+  const m = /^iss-([0-9]+\.[0-9]+)$/.exec(id);
+  return m ? m[1] : undefined;
+}
+
+/**
  * Shape check, not full schema validation (that happens at generation time
  * via the skill's validate.ts). Enough to fail loudly on wrong versions or
  * truncated files instead of rendering garbage.

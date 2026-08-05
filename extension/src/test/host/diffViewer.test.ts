@@ -108,7 +108,7 @@ suite("diff viewer", () => {
       // No chapter owns this path, so there is no diff to scope it to.
       await viewerFor(fx, fx.manifest).openIssue({
         kind: "issue",
-        issue: { id: "iss-1", path: "a.txt", severity: "low", note: "orphan" },
+        issue: { id: "iss-0.1", path: "a.txt", severity: "low", note: "orphan" },
       });
 
       const { single } = activeTab();

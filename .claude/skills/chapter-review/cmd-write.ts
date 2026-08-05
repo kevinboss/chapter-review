@@ -5,9 +5,10 @@ import {
   carryIssues,
   carryReviewed,
   installManifest,
-  issueHighWater,
+  issuesOf,
   priorStateForCarry,
   readProgress,
+  storedIssueSeq,
   writeProgress,
   withIssues,
 } from "./manifest.ts";
@@ -333,17 +334,17 @@ function installDraft(
   if (prior && prior.head !== asManifest.head) {
     console.error(
       `chapter-review: this replaces the review of "${prior.head}" ` +
-        `(${prior.chapters.length} chapters, ${(prior.issues ?? []).length} findings) ` +
+        `(${prior.chapters.length} chapters, ${issuesOf(prior).length} findings) ` +
         `with one for "${asManifest.head}". The previous one is only in ${manifestPath()}.bak.`
     );
   }
-  const priorIssues: Issue[] = prior?.issues ?? [];
-  const { kept, pruned, moved } = carryIssues(priorIssues, asManifest, prior);
+  const priorIssues: Issue[] = issuesOf(prior);
+  const { kept, pruned, moved, renumbered } = carryIssues(priorIssues, asManifest, prior);
 
   // From the issues as they were *before* pruning, so an id regeneration drops
   // is retired rather than handed out again. A draft carries no mark of its own.
-  const seq = issueHighWater(prior, priorIssues);
-  if (seq > 0) asManifest.issueSeq = seq;
+  const seq = storedIssueSeq(prior, priorIssues);
+  if (seq) asManifest.issueSeq = seq;
 
   // Carry the checkmarks forward too, pruning units whose path left the diff.
   // They live in progress.json; the manifest never carries them again.
@@ -399,6 +400,9 @@ function installDraft(
       );
     }
     for (const m of moved) console.log(`  followed rename ${m}`);
+    // Named one per line, not counted: the reviewer may have quoted the old id
+    // in a PR comment, and the mapping is the only way back to it.
+    for (const r of renumbered) console.log(`  renumbered ${r}`);
     if (repinned.length > 0) {
       console.log(`  re-pinned ${repinned.join(", ")} to match the working tree`);
     }

@@ -4,11 +4,13 @@ import { DigestMap } from "../fingerprint";
 import {
   allEntries,
   Chapter,
+  chapterNumber,
   entryKeys,
   FileEntry,
   Hunk,
   isOpen,
   Issue,
+  issueNumber,
   Manifest,
   reviewKey,
   UnassignedEntry,
@@ -157,7 +159,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   private issuesForChapter(chapterId: string): Issue[] {
-    return this.allIssues().filter((i) => i.chapterId === chapterId);
+    return this.allIssues()
+      .filter((i) => i.chapterId === chapterId)
+      .sort(byIssueNumber);
   }
 
   private issuesForFile(chapterId: string, filePath: string): Issue[] {
@@ -169,7 +173,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   /** Issues whose chapterId is unset or no longer names a chapter. */
   private orphanIssues(): Issue[] {
     const ids = new Set(this.manifest?.chapters.map((c) => c.id));
-    return this.allIssues().filter((i) => !i.chapterId || !ids.has(i.chapterId));
+    return this.allIssues()
+      .filter((i) => !i.chapterId || !ids.has(i.chapterId))
+      .sort(byIssueNumber);
   }
 
   private fileChildren(
@@ -248,8 +254,12 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   private chapterItem(chapter: Chapter): vscode.TreeItem {
+    // Numbered on the row so the reviewer can say "chapter 2" to the agent and
+    // mean the same chapter the agent calls ch-2. Findings carry the number too,
+    // which is how a chapter and its findings read as one sequence.
+    const number = chapterNumber(chapter.id);
     const item = new vscode.TreeItem(
-      chapter.title,
+      number === undefined ? chapter.title : `${number} · ${chapter.title}`,
       vscode.TreeItemCollapsibleState.Collapsed
     );
     item.id = `chapter:${chapter.id}`;
@@ -261,9 +271,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       open > 0 ? "warning" : done === total ? "pass-filled" : "book"
     );
     item.checkboxState = this.checkbox({ kind: "chapter", chapter });
-    if (chapter.description) {
-      item.tooltip = chapter.description;
-    }
+    // The full id leads the tooltip: the row shows the bare number, and this is
+    // where the spelling the CLI takes (`--chapter ch-2`) is available.
+    item.tooltip = [chapter.id, chapter.description].filter(Boolean).join("\n");
     return item;
   }
 
@@ -349,14 +359,20 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
 
   private issueItem(node: IssueNode): vscode.TreeItem {
     const { issue } = node;
-    const item = new vscode.TreeItem(issue.note, vscode.TreeItemCollapsibleState.None);
+    // "1.2 · note": the number is what the reviewer quotes back to the agent, and
+    // it reads as chapter one's second finding because the id is numbered there.
+    const number = issueNumber(issue.id);
+    const item = new vscode.TreeItem(
+      number === undefined ? issue.note : `${number} · ${issue.note}`,
+      vscode.TreeItemCollapsibleState.None
+    );
     item.id = `issue:${issue.id}`;
     const resolved = !isOpen(issue);
     const confidence = issue.confidence === "verified" ? "verified" : "suspected";
     const parts: string[] = [issue.severity, confidence];
     if (resolved) parts.push("resolved");
     item.description = parts.join(" · ");
-    item.tooltip = `${issue.severity.toUpperCase()} · ${confidence}${resolved ? " · resolved" : ""}: ${issue.note}\n${issue.path}`;
+    item.tooltip = `${issue.id} · ${issue.severity.toUpperCase()} · ${confidence}${resolved ? " · resolved" : ""}: ${issue.note}\n${issue.path}`;
     item.iconPath = issueIcon(issue);
     // Same checkbox affordance as files: ticked means resolved. Its toggle is
     // routed to the manifest (not review progress) by the checkbox handler.
@@ -372,12 +388,17 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   private issuesRootItem(): vscode.TreeItem {
+    // Unnumbered, unlike a chapter row: a chapter's number is a handle (`ch-2`,
+    // `--chapter ch-2`), and there is no ch-0 for this row's number to name. The
+    // findings under it still read 0.1, 0.2, and those ids do resolve.
     const item = new vscode.TreeItem("Issues", vscode.TreeItemCollapsibleState.Collapsed);
     item.id = "issuesRoot";
     const open = this.orphanIssues().filter(isOpen).length;
     item.description = `${open} open`;
     item.iconPath = new vscode.ThemeIcon("warning");
-    item.tooltip = "Issues not tied to a current chapter";
+    item.tooltip =
+      "Findings no chapter owns: on a quarantined path, or in a chapter this " +
+      "generation dropped. Numbered in the chapter-0 sequence (iss-0.N).";
     return item;
   }
 
@@ -396,6 +417,18 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       total: keys.length,
     };
   }
+}
+
+/**
+ * Findings in numeric order rather than the order they were recorded. A finding
+ * a regeneration re-homed keeps its place in the manifest array but takes the
+ * next number in its new chapter, so the array order can read 2.3, 2.1, 2.2.
+ */
+function byIssueNumber(a: Issue, b: Issue): number {
+  const parts = (id: string): number[] => (issueNumber(id) ?? "0.0").split(".").map(Number);
+  const [chapterA, numberA] = parts(a.id);
+  const [chapterB, numberB] = parts(b.id);
+  return chapterA - chapterB || numberA - numberB;
 }
 
 // Every issue node keeps an icon so it reads as an issue at a glance. The

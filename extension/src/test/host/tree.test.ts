@@ -60,9 +60,10 @@ suite("chapter tree", () => {
       const { provider } = await wire(fx);
       const roots = provider.getChildren();
       assert.deepEqual(kinds(roots), ["chapter", "chapter"]);
+      // Numbered, so the reviewer can name a chapter to the agent as "chapter 2".
       assert.deepEqual(
         roots.map((n) => labelOf(provider.getTreeItem(n))),
-        ["edit a top", "edit a bottom and b"]
+        ["1 · edit a top", "2 · edit a bottom and b"]
       );
     }));
 
@@ -128,19 +129,43 @@ suite("chapter tree", () => {
       );
     }));
 
-  test("findings appear under their chapter", () =>
+  test("findings appear under their chapter, numbered within it", () =>
     withFixture(async (fx) => {
       const withIssue: Manifest = {
         ...fx.manifest,
         issues: [
-          { id: "iss-1", path: "b.txt", chapterId: "ch-2", severity: "high", note: "no guard" },
+          // Out of order on purpose: the rows sort by number, not by array order,
+          // because a re-homed finding keeps its place but takes a new number.
+          { id: "iss-2.2", path: "b.txt", chapterId: "ch-2", severity: "low", note: "second" },
+          { id: "iss-2.1", path: "b.txt", chapterId: "ch-2", severity: "high", note: "no guard" },
         ],
       };
       const { provider } = await wire(fx, withIssue);
       const children = provider.getChildren(provider.getChildren()[1]);
-      assert.ok(
-        children.some((n) => n.kind === "issue" || n.kind === "issuesRoot"),
-        `expected a finding among ${kinds(children).join(", ")}`
+      const issues = children.filter((n) => n.kind === "issue");
+      assert.deepEqual(
+        issues.map((n) => labelOf(provider.getTreeItem(n))),
+        ["2.1 · no guard", "2.2 · second"],
+        `expected two findings among ${kinds(children).join(", ")}`
+      );
+    }));
+
+  test("a finding no chapter owns sits in the chapter-0 row", () =>
+    withFixture(async (fx) => {
+      const orphaned: Manifest = {
+        ...fx.manifest,
+        // No chapterId: the path is quarantined, or its chapter is gone.
+        issues: [{ id: "iss-0.1", path: "b.txt", severity: "low", note: "on noise" }],
+      };
+      const { provider } = await wire(fx, orphaned);
+      const root = provider.getChildren().find((n) => n.kind === "issuesRoot");
+      assert.ok(root, "expected an issues root");
+      // The row itself stays unnumbered: there is no ch-0 for a number to name.
+      assert.equal(labelOf(provider.getTreeItem(root)), "Issues");
+      // The finding's own number is a working handle, so it does show.
+      assert.deepEqual(
+        provider.getChildren(root).map((n) => labelOf(provider.getTreeItem(n))),
+        ["0.1 · on noise"]
       );
     }));
 

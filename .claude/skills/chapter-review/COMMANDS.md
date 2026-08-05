@@ -36,11 +36,13 @@ It re-pins `headSha`, `mergeBase` and `generatedAt` to the working tree it obser
 A "claim" is one *enumerated hunk*, except that a whole-file entry (no `hunks` array) counts as exactly 1 however many hunks the diff holds for it; `unassigned` entries are claims too, and `files` counts distinct paths.
 The preserved-counts clauses (chapters kept, issues preserved, pruned, checkmarks carried, checkmarks dropped) are appended to that sentence **only when non-zero**, so on a first write it carries no clauses at all; their absence means zero, not a missing line. The lines below it (the destination path, the coverage verdict, the `pinned to HEAD …` pin) always print.
 Read "checkmarks carried" as rows that survived path-pruning, not as units that still read as reviewed (see SKILL.md's Regenerating section). It is not a signal to go unchecking things.
+Two kinds of per-finding line follow, one per finding rather than counted: `followed rename <id>: <old path> -> <new path>` for a finding whose file moved, and `renumbered <old id> -> <new id> (<chapter>)` for one the new partition handed to another chapter. Relay the renumbered lines; the old id may be quoted somewhere the manifest can't reach.
 
 ### issue
 
 `chapter-review issue add --path P --severity S --note "…" [--confidence suspected|verified] [--chapter ch-N] [--hunk oldStart,oldLines,newStart,newLines] [--old-path P]` — record a finding.
-The id (`iss-N`) is assigned for you and the owning chapter is inferred from `--path`.
+The id is assigned for you and the owning chapter is inferred from `--path`.
+Ids are numbered per chapter (the schema's `id` gives the shape), which is what makes the number quotable off the extension's tree, where a chapter row reads `2 · <title>` and its findings `2.1`, `2.2`.
 When the path lives in **one** chapter that's unambiguous; when it spans **several** (a hunk-split file), pass `--hunk` to select the chapter that owns that range, or `--chapter` to name it outright, otherwise the command picks the first owner and warns you to disambiguate.
 `--hunk` does two jobs and the warning only mentions the first: it picks the owning chapter *and* it is what pins the finding to that range.
 Omit it and the finding anchors to the whole file, so a finding about one hunk needs `--hunk` even when `--chapter` has already settled ownership.
@@ -57,6 +59,7 @@ Don't file findings against quarantined noise: if a lockfile hunk is worth a fin
 `set` takes the same flags as `add` and needs at least one of them, including `--status open|resolved` (what `resolve`/`reopen` are shorthand for); `issue --help` prints them all.
 A `--hunk` must name a real range, copied exactly: one of the ranges the partition claims for that path, or, when the path is claimed whole, one of that file's `@@` hunks in the diff.
 `rm` retires the id rather than freeing it, so the next `add` never reuses a number you may already have quoted in a PR comment or report.
+A `set` that moves a finding to another chapter (via `--chapter`, or via a `--path`/`--hunk` another chapter owns) renumbers it into that chapter's sequence and prints the new id, since the number counts there; the old one is retired too.
 
 ### uncheck
 
@@ -95,5 +98,6 @@ Nothing enforces this; sequential calls are the contract.
 **Read `chapters.schema.json` for the field semantics.** It ships next to `SKILL.md` and every field carries a `description`, so the shape of a draft, which keys are required, and when to omit `hunks` or a `note` are all answered there. `validate.ts` (also there) enforces it and wins if the two disagree; `example-chapters.json` is the worked illustration. Only what the schema cannot state is repeated here:
 
 - **A `hunks` object and a `--hunk` flag are the same four numbers in two spellings.** The flag takes them as a bare comma-separated list in schema order, so `--hunk 7,9,8,14` names the range a draft spells `{ "oldStart": 7, "oldLines": 9, "newStart": 8, "newLines": 14 }`.
-- **`issues` and `issueSeq` are the CLI's, not yours.** `chapter-review issue …` assigns ids, infers the owning chapter and preserves both across regeneration; `write` refuses a draft carrying `issues` at all. The durable anchor is `path` (+ `hunk`), so `chapterId` re-maps itself when a path moves chapters.
+- **`issues` and `issueSeq` are the CLI's, not yours.** `chapter-review issue …` assigns ids, infers the owning chapter and preserves both across regeneration; `write` refuses a draft carrying `issues` at all. The durable anchor is `path` (+ `hunk`), so `chapterId` re-maps itself when a path moves chapters, and the id is renumbered with it: an id's chapter part must agree with its `chapterId`, and `validate.ts` refuses a manifest where it doesn't.
+- **Chapter ids start at `ch-1`.** `ch-0` is refused: 0 is the issue sequence for findings no chapter owns, which is what `iss-0.N` and `issueSeq["0"]` refer to.
 - **Checkmarks are a separate document you never author**: `<git-dir>/chapter-review/progress.json`, owned by the extension, read by the CLI, and cleared only by `uncheck`. A unit reads as checked while its stored digest matches current content, which is what re-opens a file whose bytes moved and leaves an untouched one ticked.

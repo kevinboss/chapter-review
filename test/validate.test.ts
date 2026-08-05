@@ -96,6 +96,25 @@ const cases: Case[] = [
   { name: "issue confidence omitted is valid", mutate: (m) => (m.issues[0].confidence = undefined), expectError: null },
   { name: "duplicate issue id", mutate: (m) => m.issues.push({ ...m.issues[0] }), expectError: "duplicate issue id" },
   { name: "issue with unknown field", mutate: (m) => (m.issues[0].author = "me"), expectError: "unknown property" },
+  // Ids are numbered inside their chapter, so the two halves have to agree: an
+  // iss-1.2 under chapter three is exactly what the numbering rules out.
+  { name: "issue id naming another chapter", mutate: (m) => (m.issues[0].id = "iss-1.2"), expectError: "that chapter's sequence" },
+  { name: "issue id with no chapter part", mutate: (m) => (m.issues[0].id = "iss-1"), expectError: "iss-<chapter>.<number>" },
+  {
+    name: "chapter-less issue numbered in the chapter-0 sequence is valid",
+    mutate: (m) => {
+      m.issues[0].chapterId = undefined;
+      m.issues[0].id = "iss-0.1";
+    },
+    expectError: null,
+  },
+  { name: "chapter-less issue numbered in a chapter", mutate: (m) => (m.issues[0].chapterId = undefined), expectError: "no chapter" },
+  // ch-0 is refused because 0 is the sequence for findings no chapter owns.
+  { name: "chapter numbered from 0", mutate: (m) => (m.chapters[0].id = "ch-0"), expectError: "numbered from 1" },
+  { name: "issueSeq as a single number", mutate: (m) => (m.issueSeq = 4), expectError: "keyed by chapter number" },
+  { name: "issueSeq keyed by chapter number is valid", mutate: (m) => (m.issueSeq = { "0": 1, "2": 3 }), expectError: null },
+  { name: "issueSeq keyed by chapter id", mutate: (m) => (m.issueSeq = { "ch-2": 3 }), expectError: "must be a chapter number" },
+  { name: "issueSeq with a zero mark", mutate: (m) => (m.issueSeq = { "2": 0 }), expectError: "positive integer" },
   // Checkmarks live in progress.json alone; the manifest has no `reviewed` key.
   { name: "reviewed in the manifest is rejected", mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "abcd1234" }]), expectError: "unknown property" },
 ];

@@ -23,8 +23,12 @@ const SEVERITY = new Set(["critical", "high", "low"]);
 const ISSUE_STATUS = new Set(["open", "resolved"]);
 const CONFIDENCE = new Set(["suspected", "verified"]);
 const SHA = /^[0-9a-f]{7,40}$/;
-const CHAPTER_ID = /^ch-[0-9]+$/;
-const ISSUE_ID = /^iss-[0-9]+$/;
+// Numbering starts at 1, so 0 is free to mean "no chapter" in an issue id.
+const CHAPTER_ID = /^ch-[1-9][0-9]*$/;
+// `iss-<chapter>.<n>`: findings are numbered within their chapter, so the id
+// says where the finding is. Chapter 0 is the sequence for findings with none.
+const ISSUE_ID = /^iss-([0-9]+)\.([1-9][0-9]*)$/;
+const ISSUE_SEQ_KEY = /^(0|[1-9][0-9]*)$/;
 const PATH = /^[^/]/; // repo-relative, no leading slash
 // A leading slash is not the only way out of the repo. `..` segments escape too,
 // and the manifest is the extension's input, so the check that claims to enforce
@@ -129,7 +133,7 @@ function checkChapter(ch: unknown, label: string, push: Push): void {
     return;
   }
   if (typeof ch.id !== "string" || !CHAPTER_ID.test(ch.id)) {
-    push(`${label}.id must match ch-<number>`);
+    push(`${label}.id must match ch-<number>, numbered from 1`);
   }
   if (typeof ch.title !== "string" || ch.title.length < 1 || ch.title.length > 60) {
     push(`${label}.title must be a string of 1-60 chars`);
@@ -153,8 +157,9 @@ function checkIssue(issue: unknown, label: string, push: Push): void {
     push(`${label} must be an object`);
     return;
   }
-  if (typeof issue.id !== "string" || !ISSUE_ID.test(issue.id)) {
-    push(`${label}.id must match iss-<number>`);
+  const id = typeof issue.id === "string" ? ISSUE_ID.exec(issue.id) : null;
+  if (!id) {
+    push(`${label}.id must match iss-<chapter>.<number>`);
   }
   checkPath(issue.path, `${label}.path`, push);
   if (issue.oldPath !== undefined) checkPath(issue.oldPath, `${label}.oldPath`, push);
@@ -163,7 +168,21 @@ function checkIssue(issue: unknown, label: string, push: Push): void {
     issue.chapterId !== undefined &&
     (typeof issue.chapterId !== "string" || !CHAPTER_ID.test(issue.chapterId))
   ) {
-    push(`${label}.chapterId must match ch-<number>`);
+    push(`${label}.chapterId must match ch-<number>, numbered from 1`);
+  }
+  // The chapter part of the id is what a reviewer reads off the extension's tree
+  // and quotes back, so it has to name the chapter the finding is actually filed
+  // under. Findings are renumbered when they change chapter for this reason.
+  if (id) {
+    const owner = typeof issue.chapterId === "string" ? issue.chapterId : undefined;
+    const ownerNumber = /^ch-([0-9]+)$/.exec(owner ?? "");
+    const expected = ownerNumber ? ownerNumber[1] : "0";
+    if (id[1] !== expected) {
+      push(
+        `${label}.id is ${id[0]} but the finding sits in ${owner ?? "no chapter"}; ` +
+          `it must be numbered in that chapter's sequence (iss-${expected}.<number>)`
+      );
+    }
   }
   if (!isOneOf(issue.severity, SEVERITY)) {
     push(`${label}.severity must be one of ${[...SEVERITY].join(", ")}`);
@@ -212,11 +231,22 @@ function structuralErrors(m: unknown): string[] {
   if (m.summary !== undefined && typeof m.summary !== "string") {
     push("summary must be a string");
   }
-  if (
-    m.issueSeq !== undefined &&
-    (typeof m.issueSeq !== "number" || !Number.isInteger(m.issueSeq) || m.issueSeq < 0)
-  ) {
-    push("issueSeq, when present, must be a non-negative integer");
+  if (m.issueSeq !== undefined) {
+    if (!isObject(m.issueSeq)) {
+      push(
+        "issueSeq, when present, must be an object keyed by chapter number " +
+          '("0" for findings with no chapter)'
+      );
+    } else {
+      for (const [bucket, n] of Object.entries(m.issueSeq)) {
+        if (!ISSUE_SEQ_KEY.test(bucket)) {
+          push(`issueSeq key "${bucket}" must be a chapter number ("0" = no chapter)`);
+        }
+        if (typeof n !== "number" || !Number.isInteger(n) || n < 1) {
+          push(`issueSeq["${bucket}"] must be a positive integer`);
+        }
+      }
+    }
   }
   const { chapters, unassigned, issues } = m;
   if (!isArray(chapters)) push("chapters must be an array");
