@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { changeLineFor } from "./changeLine";
+import { Hunk, Manifest } from "./model";
 import { Node } from "./tree";
 
 // The extension writes what the user is looking at here; the chapter-review
@@ -9,6 +11,20 @@ const FOCUS_PATH = "chapter-review/focus.json";
 export interface Focus {
   path?: string;
   line?: number;
+  chapterId?: string;
+  issueId?: string;
+}
+
+/**
+ * What a node points at before its line is known. The anchor is a hunk, and a
+ * hunk's newStart is the top of its leading context rather than the change, so
+ * the line the skill reads back has to be resolved against the file (see
+ * resolveFocus).
+ */
+export interface FocusAnchor {
+  path?: string;
+  oldPath?: string;
+  hunk?: Hunk;
   chapterId?: string;
   issueId?: string;
 }
@@ -46,25 +62,28 @@ export class FocusStore {
   }
 }
 
-/** The focus a given tree node represents, or undefined if it carries none. */
-export function focusForNode(node: Node): Focus | undefined {
+/** The anchor a given tree node represents, or undefined if it carries none. */
+export function focusForNode(node: Node): FocusAnchor | undefined {
   switch (node.kind) {
     case "file":
       return {
         path: node.entry.path,
-        line: node.entry.hunks?.[0]?.newStart,
+        oldPath: node.entry.oldPath,
+        hunk: node.entry.hunks?.[0],
         chapterId: node.ownerId !== "unassigned" ? node.ownerId : undefined,
       };
     case "hunk":
       return {
         path: node.entry.path,
-        line: node.hunk.newStart,
+        oldPath: node.entry.oldPath,
+        hunk: node.hunk,
         chapterId: node.ownerId !== "unassigned" ? node.ownerId : undefined,
       };
     case "issue":
       return {
         path: node.issue.path,
-        line: node.issue.hunk?.newStart,
+        oldPath: node.issue.oldPath,
+        hunk: node.issue.hunk,
         chapterId: node.issue.chapterId,
         issueId: node.issue.id,
       };
@@ -73,4 +92,25 @@ export function focusForNode(node: Node): Focus | undefined {
     default:
       return undefined;
   }
+}
+
+/**
+ * The pointer to write for an anchor: its hunk becomes the line where the change
+ * actually lands. The skill quotes this line back as the place a finding is
+ * about, so handing it newStart named a context line up to three above the code.
+ * Without a manifest to resolve against, the hunk's own start is all there is.
+ */
+export async function resolveFocus(
+  repoRoot: string,
+  m: Manifest | undefined,
+  anchor: FocusAnchor
+): Promise<Focus> {
+  const { path, hunk, chapterId, issueId } = anchor;
+  const line =
+    hunk === undefined || path === undefined
+      ? undefined
+      : m === undefined
+        ? hunk.newStart
+        : await changeLineFor(repoRoot, m, { path, oldPath: anchor.oldPath }, hunk);
+  return { path, line, chapterId, issueId };
 }
