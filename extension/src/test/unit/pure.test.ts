@@ -2,6 +2,7 @@
 
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
+import { changeLineIn } from "../../changeLine";
 import { applyHunks } from "../../diffScope";
 import { buildFolderTree } from "../../tree/folderTree";
 import type { FileNode, FolderNode, Node } from "../../tree/nodes";
@@ -57,6 +58,42 @@ describe("applyHunks", () => {
 
   it("no hunks yields the merge-base content untouched", () => {
     assert.equal(applyHunks(oldText, newText, []).text, oldText);
+  });
+});
+
+describe("changeLineIn", () => {
+  const oldText = "a\nb\nc\nd\ne\n";
+  const newText = "a\nb\nc\nd\nE\n";
+
+  it("skips the leading context a hunk's coordinates include", () => {
+    // What `git diff --unified=3` emits for the edit on line 5: newStart is 2,
+    // and a cursor put there sits three lines above the code.
+    const h: Hunk = { oldStart: 2, oldLines: 4, newStart: 2, newLines: 4 };
+    assert.equal(changeLineIn(oldText, newText, h), 5);
+  });
+
+  it("leaves a hunk with no context at its own start", () => {
+    const h: Hunk = { oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 };
+    assert.equal(changeLineIn(oldText, newText, h), 5);
+  });
+
+  it("points an insertion at the inserted line", () => {
+    const h: Hunk = { oldStart: 2, oldLines: 0, newStart: 3, newLines: 1 };
+    assert.equal(changeLineIn("a\nb\nc\n", "a\nb\nX\nc\n", h), 3);
+  });
+
+  it("points a trailing insertion past the shared context", () => {
+    // Three context lines, then a line appended: the first four lines match, so
+    // the change is on the fourth line of the hunk.
+    const h: Hunk = { oldStart: 1, oldLines: 3, newStart: 1, newLines: 4 };
+    assert.equal(changeLineIn("a\nb\nc\n", "a\nb\nc\nX\n", h), 4);
+  });
+
+  it("falls back to the hunk's start when a side is missing", () => {
+    // A blob the manifest pins but git can no longer show yields "", and there is
+    // nothing left to compare against.
+    const h: Hunk = { oldStart: 2, oldLines: 4, newStart: 2, newLines: 4 };
+    assert.equal(changeLineIn("", newText, h), 2);
   });
 });
 

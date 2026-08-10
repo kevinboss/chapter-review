@@ -103,6 +103,37 @@ suite("diff viewer", () => {
       assert.match(right?.query ?? "", /c\.txt/);
     }));
 
+  // Where the cursor lands is not asserted here: the content providers are
+  // registered against the workspace the harness activates on, not the fixture
+  // repo, so both diff sides come back empty and any selection clamps to line 0.
+  // The line the viewer aims at is changeLineFor's, covered in the unit suite.
+
+  test("a whole-file claim with a pinned finding still opens its own diff", () =>
+    withFixture(async (fx) => {
+      // a.txt claimed whole, so there is no scoped patch and the finding's hunk
+      // has to resolve against the real head file.
+      const whole: FileEntry = { path: "a.txt", status: "modified" };
+      const manifest: Manifest = {
+        ...fx.manifest,
+        chapters: [{ id: "ch-1", title: "edits a", files: [whole] }],
+      };
+      await viewerFor(fx, manifest).openIssue({
+        kind: "issue",
+        issue: {
+          id: "iss-1.1",
+          path: "a.txt",
+          chapterId: "ch-1",
+          severity: "low",
+          note: "L5 is wrong",
+          hunk: { oldStart: 3, oldLines: 3, newStart: 3, newLines: 3 },
+        },
+      });
+
+      const { left, right } = activeTab();
+      assert.equal(left?.scheme, GIT_SCHEME);
+      assert.equal(right?.scheme, GIT_SCHEME, "a whole claim diffs against the real head file");
+    }));
+
   test("an orphaned finding falls back to the working file", () =>
     withFixture(async (fx) => {
       // No chapter owns this path, so there is no diff to scope it to.

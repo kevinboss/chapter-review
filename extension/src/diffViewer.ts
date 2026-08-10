@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { changeLineFor } from "./changeLine";
 import { applyHunks } from "./diffScope";
 import { gitShow, gitUri, patchedUri, PatchedContentProvider } from "./gitContent";
 import { FileEntry, Hunk, Issue, Manifest, UnassignedEntry } from "./model";
@@ -42,7 +43,7 @@ export class DiffViewer {
     if (entry && issue.chapterId !== undefined) {
       await this.openEntry(issue.chapterId, entry, focusHunkFor(issue, entry));
     } else {
-      await this.openWorkingFile(issue);
+      await this.openWorkingFile(issue, m);
     }
   }
 
@@ -80,27 +81,36 @@ export class DiffViewer {
         return { right: scoped, line: Math.max(0, (patch.changeLines.get(focus) ?? 1) - 1) };
       }
       // No scoped diff (whole-file claim, or an added/deleted file): the right
-      // side is the real head file, so a focus hunk's newStart is the real line.
-      return {
-        right: entry.status === "deleted" ? gitUri("", entry.path) : gitUri(headRef, entry.path),
-        line:
-          focusHunk && entry.status !== "deleted"
-            ? Math.max(0, focusHunk.newStart - 1)
-            : undefined,
-      };
+      // side is the real head file, so the focus hunk resolves to a real line in
+      // it. Resolved rather than taken as newStart, because that is the top of
+      // the hunk's leading context, not the change (see changeLine).
+      const right =
+        entry.status === "deleted" ? gitUri("", entry.path) : gitUri(headRef, entry.path);
+      if (!focusHunk || entry.status === "deleted") {
+        return { right, line: undefined };
+      }
+      const at = await changeLineFor(this.folderUri.fsPath, m, entry, focusHunk);
+      return { right, line: Math.max(0, at - 1) };
     })();
     const options: vscode.TextDocumentShowOptions =
       line === undefined ? {} : { selection: new vscode.Range(line, 0, line, 0) };
     await vscode.commands.executeCommand("vscode.diff", left, right, title, options);
   }
 
-  /** Orphaned issue: open the plain working file at the issue's line. */
-  private async openWorkingFile(issue: Issue): Promise<void> {
+  /**
+   * Orphaned issue: open the plain working file at the issue's line. The line is
+   * resolved against the manifest's commits, which is the closest the finding's
+   * coordinates can get; the working copy may have moved since either of them.
+   */
+  private async openWorkingFile(issue: Issue, m: Manifest): Promise<void> {
     try {
       const doc = await vscode.workspace.openTextDocument(
         vscode.Uri.joinPath(this.folderUri, issue.path)
       );
-      const line = Math.max(0, (issue.hunk?.newStart ?? 1) - 1);
+      const at = issue.hunk
+        ? await changeLineFor(this.folderUri.fsPath, m, issue, issue.hunk)
+        : 1;
+      const line = Math.max(0, at - 1);
       await vscode.window.showTextDocument(doc, {
         selection: new vscode.Range(line, 0, line, 0),
       });

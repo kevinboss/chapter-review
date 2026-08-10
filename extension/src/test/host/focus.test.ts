@@ -5,7 +5,7 @@ import * as assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { FocusStore, focusForNode, Focus } from "../../focus";
+import { FocusStore, focusForNode, resolveFocus, Focus } from "../../focus";
 import { withFixture, Fixture } from "../fixture";
 import type { Node } from "../../tree";
 
@@ -69,14 +69,19 @@ suite("focusForNode", () => {
   const entry = { path: "a.txt", status: "modified" as const };
   const hunk = { oldStart: 5, oldLines: 1, newStart: 7, newLines: 1 };
 
-  test("a file points at its first hunk's line", () => {
+  test("a file anchors to its first hunk", () => {
     const node: Node = { kind: "file", ownerId: "ch-1", entry: { ...entry, hunks: [hunk] } };
-    assert.deepEqual(focusForNode(node), { path: "a.txt", line: 7, chapterId: "ch-1" });
+    assert.deepEqual(focusForNode(node), {
+      path: "a.txt",
+      oldPath: undefined,
+      hunk,
+      chapterId: "ch-1",
+    });
   });
 
-  test("a whole-file claim carries no line", () => {
+  test("a whole-file claim carries no hunk", () => {
     const node: Node = { kind: "file", ownerId: "ch-1", entry };
-    assert.deepEqual(focusForNode(node), { path: "a.txt", line: undefined, chapterId: "ch-1" });
+    assert.equal(focusForNode(node)?.hunk, undefined);
   });
 
   test("a quarantined file reports no chapter", () => {
@@ -84,9 +89,9 @@ suite("focusForNode", () => {
     assert.equal(focusForNode(node)?.chapterId, undefined);
   });
 
-  test("a hunk points at its own line", () => {
+  test("a hunk anchors to itself", () => {
     const node: Node = { kind: "hunk", ownerId: "ch-2", entry, hunk, index: 0 };
-    assert.deepEqual(focusForNode(node), { path: "a.txt", line: 7, chapterId: "ch-2" });
+    assert.equal(focusForNode(node)?.hunk, hunk);
   });
 
   test("an issue carries its id, so the skill can look the finding up", () => {
@@ -96,10 +101,20 @@ suite("focusForNode", () => {
     };
     assert.deepEqual(focusForNode(node), {
       path: "b.txt",
-      line: 7,
+      oldPath: undefined,
+      hunk,
       chapterId: "ch-2",
       issueId: "iss-2.3",
     });
+  });
+
+  test("a renamed entry carries the pre-rename path, so the before side resolves", () => {
+    const node: Node = {
+      kind: "file",
+      ownerId: "ch-1",
+      entry: { path: "c.txt", oldPath: "b.txt", status: "renamed", hunks: [hunk] },
+    };
+    assert.equal(focusForNode(node)?.oldPath, "b.txt");
   });
 
   test("a chapter carries only its id", () => {
@@ -113,5 +128,64 @@ suite("focusForNode", () => {
   test("a node with nothing to point at yields no focus", () => {
     const node: Node = { kind: "staleWarning" };
     assert.equal(focusForNode(node), undefined);
+  });
+});
+
+suite("resolveFocus", () => {
+  // a.txt is "l1 L2 l3 l4 L5 l6" against a base of "l1 l2 l3 l4 l5 l6", so the
+  // edits are on lines 2 and 5.
+  const anchor = (hunk: { oldStart: number; oldLines: number; newStart: number; newLines: number }) =>
+    ({ path: "a.txt", hunk, chapterId: "ch-1" });
+
+  test("reports the changed line, not the top of the hunk's context", () =>
+    withFixture(async (fx) => {
+      // A hunk spanning lines 3-5, where the edit is on 5: the two lines above it
+      // are identical on both sides, which is what unified context looks like.
+      const focus = await resolveFocus(
+        fx.dir,
+        fx.manifest,
+        anchor({ oldStart: 3, oldLines: 3, newStart: 3, newLines: 3 })
+      );
+      assert.equal(focus.line, 5, "the first line that differs, not newStart");
+    }));
+
+  test("a hunk with no leading context keeps its own start", () =>
+    withFixture(async (fx) => {
+      const focus = await resolveFocus(
+        fx.dir,
+        fx.manifest,
+        anchor({ oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 })
+      );
+      assert.equal(focus.line, 5);
+    }));
+
+  test("drops the hunk from what it writes, and keeps the ids", () =>
+    withFixture(async (fx) => {
+      const focus = await resolveFocus(fx.dir, fx.manifest, {
+        path: "a.txt",
+        hunk: { oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 },
+        chapterId: "ch-2",
+        issueId: "iss-2.1",
+      });
+      assert.deepEqual(focus, {
+        path: "a.txt",
+        line: 5,
+        chapterId: "ch-2",
+        issueId: "iss-2.1",
+      });
+    }));
+
+  test("an anchor with no hunk carries no line", () =>
+    withFixture(async (fx) => {
+      const focus = await resolveFocus(fx.dir, fx.manifest, { path: "a.txt", chapterId: "ch-1" });
+      assert.equal(focus.line, undefined);
+    }));
+
+  test("without a manifest the hunk's own start is all there is", async () => {
+    const focus = await resolveFocus("", undefined, {
+      path: "a.txt",
+      hunk: { oldStart: 2, oldLines: 5, newStart: 2, newLines: 5 },
+    });
+    assert.equal(focus.line, 2);
   });
 });

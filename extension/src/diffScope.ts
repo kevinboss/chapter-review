@@ -1,3 +1,4 @@
+import { changeOffset } from "./changeLine";
 import { Hunk } from "./model";
 
 export interface ScopedPatch {
@@ -26,23 +27,11 @@ export function applyHunks(oldText: string, newText: string, hunks: Hunk[]): Sco
     // otherwise oldStart is the first replaced line.
     const start = h.oldLines === 0 ? h.oldStart : h.oldStart - 1;
     out.push(...oldLines.slice(read, start));
-    changeLines.set(h, out.length + firstChangeOffset(oldLines, newLines, h) + 1);
+    changeLines.set(h, out.length + changeOffset(oldLines, newLines, h) + 1);
     out.push(...newLines.slice(h.newStart - 1, h.newStart - 1 + h.newLines));
     return start + h.oldLines;
   }, 0);
   out.push(...oldLines.slice(cursor));
 
   return { text: out.join("\n"), changeLines };
-}
-
-// Hunk coordinates include unified-diff context lines; skip past the leading
-// lines that are identical on both sides.
-function firstChangeOffset(oldLines: string[], newLines: string[], h: Hunk): number {
-  const shared = Math.min(h.oldLines, h.newLines);
-  const differs = Array.from({ length: shared }, (_, k) => k).find(
-    (k) => oldLines[h.oldStart - 1 + k] !== newLines[h.newStart - 1 + k]
-  );
-  if (differs !== undefined) return differs;
-  // Pure insertion or deletion after fully shared context.
-  return Math.min(shared, Math.max(h.newLines - 1, 0));
 }

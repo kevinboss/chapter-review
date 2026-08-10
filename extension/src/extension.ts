@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
 import { DiffViewer } from "./diffViewer";
-import { FocusStore, focusForNode } from "./focus";
+import { FocusStore, focusForNode, resolveFocus } from "./focus";
 import {
   GIT_SCHEME,
   GitContentProvider,
@@ -220,13 +220,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
+  // Records what the reviewer is looking at. Async because resolving the anchor's
+  // line reads the file, which focusForNode cannot do.
+  async function writeFocus(node: Node): Promise<void> {
+    const anchor = focusForNode(node);
+    if (anchor) {
+      await focus.write(await resolveFocus(folderUri.fsPath, provider.manifest, anchor));
+    }
+  }
+
   // Opening an issue both shows its diff and records it as the current focus.
   async function openIssue(node: IssueNode): Promise<void> {
     await diffViewer.openIssue(node);
-    const f = focusForNode(node);
-    if (f) {
-      await focus.write(f);
-    }
+    await writeFocus(node);
   }
 
   // Applies the checked/unchecked state of issue checkboxes to the manifest in
@@ -290,9 +296,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     view.onDidChangeSelection(async (e) => {
       const node = e.selection[0] as Node | undefined;
-      const f = node && focusForNode(node);
-      if (f) {
-        await focus.write(f);
+      if (node) {
+        await writeFocus(node);
       }
     }),
     vscode.commands.registerCommand("chapterReview.refresh", reload),
