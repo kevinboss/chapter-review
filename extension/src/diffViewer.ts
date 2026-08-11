@@ -77,13 +77,14 @@ export class DiffViewer {
         const scoped = patchedUri(ownerId, entry.path);
         this.patchedDocs.set(scoped, patch.text);
 
+        // A hunk from outside this entry misses the map. No line at all then:
+        // defaulting to 1 read as if the finding were at the top of the file.
         const focus = focusHunk ?? entry.hunks[0];
-        return { right: scoped, line: Math.max(0, (patch.changeLines.get(focus) ?? 1) - 1) };
+        const at = patch.changeLines.get(focus);
+        return { right: scoped, line: at === undefined ? undefined : Math.max(0, at - 1) };
       }
-      // No scoped diff (whole-file claim, or an added/deleted file): the right
-      // side is the real head file, so the focus hunk resolves to a real line in
-      // it. Resolved rather than taken as newStart, because that is the top of
-      // the hunk's leading context, not the change (see changeLine).
+      // No scoped diff (whole-file claim, or an added/deleted file), so the right
+      // side is the real head file and the focus hunk resolves against it.
       const right =
         entry.status === "deleted" ? gitUri("", entry.path) : gitUri(headRef, entry.path);
       if (!focusHunk || entry.status === "deleted") {
@@ -128,23 +129,40 @@ function ownerTitle(m: Manifest, ownerId: string): string {
 }
 
 /**
- * The hunk to focus when opening an issue. Prefer the entry's own hunk object so
- * the scoped-diff line lookup matches by identity, but fall back to the issue's
- * own hunk for whole-file entries that enumerate no hunks; otherwise the line
- * would be discarded and the diff would open at line 1.
+ * The hunk to focus when opening an issue. It has to be the entry's own object:
+ * the scoped diff's line map is keyed by identity, so an equal-but-separate hunk
+ * finds nothing there and the diff opens with no cursor.
+ *
+ * Exact coordinates first, then the range covering the finding, since a partition
+ * rewrite renumbers hunks and merges neighbours while the finding keeps the
+ * coordinates it was recorded with. Old side before new, as the CLI's own
+ * re-keying does: an edit above a hunk moves its new side only, so matching there
+ * can land on a neighbour.
+ *
+ * A whole-file entry has no ranges to match, and a finding's coordinates are the
+ * head file's own in that case.
  */
-function focusHunkFor(issue: Issue, entry: Entry): Hunk | undefined {
-  if (!issue.hunk) {
-    return undefined;
-  }
+export function focusHunkFor(issue: Issue, entry: Entry): Hunk | undefined {
   const { hunk } = issue;
+  if (!hunk || !entry.hunks) {
+    return hunk;
+  }
   return (
-    entry.hunks?.find(
-      (h) =>
-        h.oldStart === hunk.oldStart &&
-        h.oldLines === hunk.oldLines &&
-        h.newStart === hunk.newStart &&
-        h.newLines === hunk.newLines
-    ) ?? hunk
+    entry.hunks.find((h) => sameRange(h, hunk)) ??
+    entry.hunks.find((h) => spansOverlap(h.oldStart, h.oldLines, hunk.oldStart, hunk.oldLines)) ??
+    entry.hunks.find((h) => spansOverlap(h.newStart, h.newLines, hunk.newStart, hunk.newLines)) ??
+    hunk
   );
+}
+
+const sameRange = (a: Hunk, b: Hunk): boolean =>
+  a.oldStart === b.oldStart &&
+  a.oldLines === b.oldLines &&
+  a.newStart === b.newStart &&
+  a.newLines === b.newLines;
+
+/** Do two spans [start, start+len) overlap? A zero-length span overlaps nothing. */
+function spansOverlap(startA: number, lenA: number, startB: number, lenB: number): boolean {
+  if (lenA === 0 || lenB === 0) return false;
+  return startA < startB + lenB && startB < startA + lenA;
 }
