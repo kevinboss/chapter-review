@@ -344,6 +344,80 @@ test("issue add and set refuse a chapter that does not hold the path", () => {
   });
 });
 
+test("issue add and set refuse a chapter that does not claim the pinned range", () => {
+  withWrittenRepo((repo) => {
+    // a.txt is split: ch-1 claims line 2, ch-2 claims line 5. Naming ch-1 while
+    // pinning to ch-2's range clears both earlier checks (ch-1 does hold a.txt,
+    // and the range is claimed somewhere), and cannot survive a `write`.
+    const add = cli(
+      ["issue", "add", "--path", "a.txt", "--chapter", "ch-1", "--hunk", "5,1,5,1",
+        "--severity", "low", "--note", "x"],
+      { cwd: repo.dir }
+    );
+    assert.equal(add.code, 1, add.all);
+    assert.match(add.err, /ch-1 does not claim that range of a\.txt/);
+    assert.match(add.err, /belongs to ch-2/);
+    assert.equal((repo.readManifest().issues ?? []).length, 0, "nothing should be recorded");
+
+    const own = cli(
+      ["issue", "add", "--path", "a.txt", "--chapter", "ch-1", "--hunk", "2,1,2,1",
+        "--severity", "low", "--note", "top"],
+      { cwd: repo.dir }
+    );
+    assert.equal(own.code, 0, own.all);
+
+    const set = cli(
+      ["issue", "set", "iss-1.1", "--chapter", "ch-1", "--hunk", "5,1,5,1"],
+      { cwd: repo.dir }
+    );
+    assert.equal(set.code, 1, set.all);
+    assert.match(set.err, /ch-1 does not claim that range/);
+    const issue = repo.readManifest().issues?.[0];
+    assert.deepEqual(issue?.hunk, { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 });
+  });
+});
+
+test("write names findings whose range no chapter claims any more", () => {
+  withWrittenRepo((repo) => {
+    const add = cli(
+      ["issue", "add", "--path", "a.txt", "--hunk", "5,1,5,1", "--severity", "low",
+        "--note", "L5 is wrong"],
+      { cwd: repo.dir }
+    );
+    assert.equal(add.code, 0, add.all);
+
+    // The author fixes it, so that hunk leaves the diff while the top edit stays.
+    // Re-keying has nothing to move the finding onto and leaves the coordinates,
+    // which is the state the extension cannot place.
+    writeFileSync(`${repo.dir}/a.txt`, "l1\nL2\nl3\nl4\nl5\nl6\n");
+    repo.git("commit", "-am", "fix L5");
+    const chapters: Chapter[] = [
+      {
+        id: "ch-1",
+        title: "edit a top",
+        files: [
+          {
+            path: "a.txt",
+            status: "modified",
+            hunks: [{ oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 }],
+          },
+        ],
+      },
+      { id: "ch-2", title: "edit b", files: [{ path: "b.txt", status: "modified" }] },
+    ];
+    const r = cli(["write"], {
+      cwd: repo.dir,
+      input: draft(repo, chapters, { headSha: repo.git("rev-parse", "HEAD").trim() }),
+    });
+
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /1 finding whose range no chapter claims any more/);
+    // The number it answers to now: this write re-homed it out of ch-2.
+    assert.match(r.out, /iss-1\.\d: a\.txt @@ -5,1 \+5,1 @@/);
+    assert.match(r.out, /issue resolve.*issue set/s);
+  });
+});
+
 test("issue set says to re-read the note when a hunk re-anchors the finding", () => {
   withWrittenRepo((repo) => {
     cli(
