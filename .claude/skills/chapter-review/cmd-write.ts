@@ -339,7 +339,11 @@ function installDraft(
     );
   }
   const priorIssues: Issue[] = issuesOf(prior);
-  const { kept, pruned, moved, renumbered } = carryIssues(priorIssues, asManifest, prior);
+  const { kept, pruned, moved, renumbered, unanchored } = carryIssues(
+    priorIssues,
+    asManifest,
+    prior
+  );
 
   // From the issues as they were *before* pruning, so an id regeneration drops
   // is retired rather than handed out again. A draft carries no mark of its own.
@@ -403,6 +407,20 @@ function installDraft(
     // Named one per line, not counted: the reviewer may have quoted the old id
     // in a PR comment, and the mapping is the only way back to it.
     for (const r of renumbered) console.log(`  renumbered ${r}`);
+    // Reported here because this run is where the anchor came loose, and only the
+    // caller can tell "already fixed" from "still true, moved". Left to the
+    // extension it becomes a finding pointing into code no chapter shows.
+    if (unanchored.length > 0) {
+      console.log(
+        `  ${unanchored.length} finding${unanchored.length === 1 ? "" : "s"} whose range ` +
+          "no chapter claims any more:"
+      );
+      for (const u of unanchored) console.log(`    ${u}`);
+      console.log(
+        "    Re-read each one: `issue resolve` it if the change it named is gone, or " +
+          "`issue set <id> --hunk` onto the range it belongs to now."
+      );
+    }
     if (repinned.length > 0) {
       console.log(`  re-pinned ${repinned.join(", ")} to match the working tree`);
     }

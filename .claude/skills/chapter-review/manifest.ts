@@ -295,16 +295,29 @@ export function ownerChapterId(
  * sequence, because its id counts there: keeping the old number would leave an
  * `iss-1.2` filed under chapter three, which is the mismatch chapter-scoped ids
  * exist to rule out. Its old number stays retired.
+ *
+ * `unanchored` reports the findings re-keying could not place: their path is split
+ * into ranges and none of them covers the finding any more, which is what a fix
+ * landing on the reviewed hunk leaves behind. They are kept, since the finding may
+ * still stand, but the caller has to say so — the coordinates now point into code
+ * the partition does not claim, and only this run knows it happened.
  */
 export function carryIssues(
   oldIssues: Issue[],
   newManifest: Manifest,
   prior?: Manifest | null
-): { kept: Issue[]; pruned: string[]; moved: string[]; renumbered: string[] } {
+): {
+  kept: Issue[];
+  pruned: string[];
+  moved: string[];
+  renumbered: string[];
+  unanchored: string[];
+} {
   const kept: Issue[] = [];
   const pruned: string[] = [];
   const moved: string[] = [];
   const renumbered: string[] = [];
+  const unanchored: string[] = [];
   const allocate = issueIdAllocator(issueHighWater(prior, oldIssues));
   for (const issue of oldIssues) {
     const path = currentPathFor(newManifest, issue.path, prior);
@@ -320,9 +333,31 @@ export function carryIssues(
     if (!sameChapter) {
       renumbered.push(`${issue.id} -> ${id} (${chapterId ?? "no chapter"})`);
     }
+    // After renumbering, since the id named here is the one the caller has to
+    // pass back and a re-homed finding no longer answers to its old number.
+    if (hunk !== undefined && !anchorResolves(newManifest, path, hunk)) {
+      unanchored.push(`${id}: ${path} ${hunkHeader(hunk)}`);
+    }
     kept.push(withoutUndefined({ ...issue, id, path, hunk, chapterId }));
   }
-  return { kept, pruned, moved, renumbered };
+  return { kept, pruned, moved, renumbered, unanchored };
+}
+
+/** A hunk as a unified-diff header, the spelling `issue list` uses. */
+const hunkHeader = (h: Hunk): string =>
+  `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`;
+
+/**
+ * Does the partition still hold a range covering this anchor? True for a path
+ * claimed whole: there are no ranges to miss, and the finding's coordinates read
+ * against the file itself. False only when the path is split and no range covers
+ * it, which leaves the finding pointing at code no chapter shows.
+ */
+function anchorResolves(manifest: Manifest, path: string, hunk: Hunk): boolean {
+  const ranges = allEntries(manifest)
+    .filter((e) => e.path === path)
+    .flatMap((e) => e.hunks ?? []);
+  return ranges.length === 0 || ranges.some((r) => hunksOverlap(r, hunk));
 }
 
 /** An issue id: the number of the chapter it sits in, then its number there. */

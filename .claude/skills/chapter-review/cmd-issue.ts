@@ -110,6 +110,43 @@ const rangeList = (hs: Hunk[]): string =>
   hs.map((h) => `-${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines}`).join("  ");
 
 /**
+ * Reject a --chapter that holds the path but not the range the finding pins to.
+ * requireRealHunk accepts any range the partition claims *somewhere*, so a finding
+ * could be filed in ch-1 pinned to a range ch-2 owns. It does not survive: `write`
+ * reads the owner back off path+hunk and moves it. Until then it is worse than
+ * mis-filed, because the extension looks the range up among that chapter's own
+ * claims, finds nothing, and cannot place the finding at all.
+ *
+ * A chapter claiming the path whole has no ranges of its own, and pinning to one of
+ * the file's diff hunks is legitimate there.
+ */
+function requireChapterOwnsHunk(
+  manifest: Manifest,
+  p: string,
+  hunk: Hunk | undefined,
+  chapterId: string | undefined
+): void {
+  if (chapterId === undefined || hunk === undefined) return;
+  const chapter = manifest.chapters.find((ch) => ch.id === chapterId);
+  // Neither a missing chapter nor one that does not hold the path is this
+  // check's error to report; both die earlier.
+  if (!chapter) return;
+  const claimed = chapter.files.filter((f) => f.path === p).flatMap((f) => f.hunks ?? []);
+  if (claimed.length === 0 || claimed.some((h) => hunkEquals(h, hunk))) return;
+  const owner = manifest.chapters.find((c) =>
+    c.files.some((f) => f.path === p && (f.hunks ?? []).some((h) => hunkEquals(h, hunk)))
+  );
+  die(
+    `chapter-review: ${chapterId} does not claim that range of ${p}, so a finding pinned ` +
+      "there would not stay: `write` reads the owner back off path+hunk and moves it.\n" +
+      `  ${chapterId} claims: ${rangeList(claimed)}\n` +
+      (owner
+        ? `  That range belongs to ${owner.id}. Name it instead, or pick one of the above.`
+        : "  No chapter claims that range. Pick one of the above.")
+  );
+}
+
+/**
  * Reject a --hunk pinning the finding to a range that does not exist. The range
  * is stored as the anchor, so a typo'd one sends the extension to lines the diff
  * does not have.
@@ -232,6 +269,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       requireRealOldPath(manifest, fieldPath, fields.oldPath);
       requireRealHunk(manifest, fieldPath, fields.hunk);
       requireChapterOwnsPath(manifest, fieldPath, fields.chapterId);
+      requireChapterOwnsHunk(manifest, fieldPath, fields.hunk, fields.chapterId);
       // Warned, not refused: re-running a command is the usual cause, but two
       // findings can legitimately share a path and note if a reviewer wants them
       // tracked separately, so the caller decides.
@@ -340,6 +378,10 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       Object.assign(issue, updates);
       if (droppedHunk) issue.hunk = undefined;
       requireRealHunk(manifest, issue.path, issue.hunk);
+      // Against the chapter the finding ends up in: an explicit --chapter wins,
+      // and without one the owner is re-read off the anchor below, which cannot
+      // disagree with it.
+      requireChapterOwnsHunk(manifest, issue.path, issue.hunk, updates.chapterId);
       // Re-anchoring a finding must re-home it: `add` infers the owning chapter
       // from --path/--hunk, so `set` has to as well. Without this, moving a
       // finding to a path or range another chapter owns leaves it filed under

@@ -38,6 +38,7 @@ The preserved-counts clauses (chapters kept, issues preserved, pruned, checkmark
 One clause among them is not a count: `dropped ch-N[, ch-M]` names the chapter ids the previous manifest had and this write does not, merged away or gone. The lines below it (the destination path, the coverage verdict, the `pinned to HEAD …` pin) always print.
 Read "checkmarks carried" as rows that survived path-pruning, not as units that still read as reviewed (see SKILL.md's Regenerating section). It is not a signal to go unchecking things.
 Two kinds of per-finding line follow, one per finding rather than counted: `followed rename <id>: <old path> -> <new path>` for a finding whose file moved, and `renumbered <old id> -> <new id> (<chapter>)` for one the new partition handed to another chapter. Relay the renumbered lines; the old id may be quoted somewhere the manifest can't reach.
+A third block lists findings whose range no chapter claims any more, `<id>: <path> @@ …`, and needs a decision per finding rather than relaying: see SKILL.md's Regenerating section. A path claimed whole never appears there, since it has no ranges to miss.
 Both fire for one finding when its file was renamed *and* its chapter changed, and both name the id it arrived with, so the pair reads as one event on one finding rather than two findings that happen to share a number.
 
 ### issue
@@ -55,6 +56,7 @@ A finding defaults to `confidence: suspected`; see SKILL.md step 7.
 Findings anchor to **chapters only**: `--chapter` takes `ch-<number>`, never `unassigned`.
 It must also name a chapter whose `files` hold `--path`, and any one of them will do for a split path.
 A chapter that holds none of the path is refused rather than stored: `chapterId` is read back off path(+hunk) on every `write`, so such a finding would be moved to the real owner and renumbered, in a line that looks exactly like one the branch caused.
+With `--hunk`, the named chapter must claim that range too, not just the path: `ch-1 --hunk <a range ch-2 owns>` is the same doomed pairing one step finer, and until the next `write` corrects it the extension has a finding whose range its chapter does not claim, which it cannot place at all.
 For a path split between a chapter and `unassigned`, the finding lands on the chapter-side owner (that split doesn't count as "spans several", so you get no ambiguity warning); a purely quarantined path has no owner, so the finding is recorded without a `chapterId` and the extension shows it outside any chapter.
 Don't file findings against quarantined noise: if a lockfile hunk is worth a finding, it wasn't noise.
 The command warns when you do it anyway (the path is quarantined, so the finding lands in the chapter-0 sequence) and records it regardless, the same way it warns about a duplicate.
