@@ -3,10 +3,10 @@
 
 import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
-import { DiffViewer } from "../../diffViewer";
+import { DiffViewer, focusHunkFor } from "../../diffViewer";
 import { GIT_SCHEME, PATCHED_SCHEME, PatchedContentProvider } from "../../gitContent";
 import { withFixture, Fixture } from "../fixture";
-import type { FileEntry, Manifest } from "../../model";
+import type { FileEntry, Hunk, Issue, Manifest } from "../../model";
 
 interface OpenTab {
   left?: vscode.Uri;
@@ -147,4 +147,84 @@ suite("diff viewer", () => {
       assert.equal(single.scheme, "file", "a plain editor, not a diff");
       assert.match(single.path, /a\.txt$/);
     }));
+
+  test("a finding pinned to a range the chapter dropped still opens the diff", () =>
+    withFixture(async (fx) => {
+      // ch-1 claims line 2 only; the finding names a range nothing there covers,
+      // which is what a fix landing on the reviewed hunk leaves behind.
+      await viewerFor(fx, fx.manifest).openIssue({
+        kind: "issue",
+        issue: {
+          id: "iss-1.1",
+          path: "a.txt",
+          chapterId: "ch-1",
+          severity: "low",
+          note: "already fixed",
+          hunk: { oldStart: 20, oldLines: 1, newStart: 20, newLines: 1 },
+        },
+      });
+
+      const { right } = activeTab();
+      assert.equal(right?.scheme, PATCHED_SCHEME, "still the chapter's own scoped diff");
+    }));
+});
+
+/**
+ * The finding-to-hunk match behind the cursor. Asserted on the returned object
+ * rather than on the editor, since identity is the whole point: the scoped diff's
+ * line map is keyed by the entry's own hunks.
+ */
+suite("focusHunkFor", () => {
+  const top: Hunk = { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 };
+  const bottom: Hunk = { oldStart: 10, oldLines: 4, newStart: 10, newLines: 4 };
+  const entry: FileEntry = { path: "a.txt", status: "modified", hunks: [top, bottom] };
+  const finding = (hunk?: Hunk): Issue => ({
+    id: "iss-1.1",
+    path: "a.txt",
+    chapterId: "ch-1",
+    severity: "low",
+    note: "x",
+    hunk,
+  });
+
+  test("exact coordinates yield the entry's own object, not the finding's copy", () => {
+    const same = { ...bottom };
+    const found = focusHunkFor(finding(same), entry);
+    assert.equal(found, bottom, "identity, or the scoped diff's line map misses it");
+    assert.notEqual(found, same);
+  });
+
+  test("drifted coordinates resolve to the range that covers them", () => {
+    // The partition was recut and the hunk now spans more lines; the finding
+    // still carries the range it was recorded against.
+    const recut: Hunk = { oldStart: 8, oldLines: 8, newStart: 8, newLines: 8 };
+    const found = focusHunkFor(finding(bottom), { ...entry, hunks: [top, recut] });
+    assert.equal(found, recut);
+  });
+
+  test("the old side decides, so an edit above cannot pull the match sideways", () => {
+    // Inserting lines above moved every new-side range down by two: the finding's
+    // new span now sits over `later`, while its old span still names `moved`.
+    const moved: Hunk = { oldStart: 10, oldLines: 4, newStart: 12, newLines: 4 };
+    const later: Hunk = { oldStart: 30, oldLines: 4, newStart: 10, newLines: 4 };
+    // `later` comes first, so a new-side match would win on array order alone.
+    const found = focusHunkFor(finding(bottom), { ...entry, hunks: [later, moved] });
+    assert.equal(found, moved, "matched on the side an edit elsewhere does not move");
+  });
+
+  test("a range nothing covers comes back as the finding's own", () => {
+    // Nothing here can place the finding; the caller opens the diff without a
+    // line rather than inventing one. `write` reports this state when it arises.
+    const gone: Hunk = { oldStart: 90, oldLines: 1, newStart: 90, newLines: 1 };
+    assert.equal(focusHunkFor(finding(gone), entry), gone);
+  });
+
+  test("a whole-file entry keeps the finding's own coordinates", () => {
+    const whole: FileEntry = { path: "a.txt", status: "modified" };
+    assert.equal(focusHunkFor(finding(bottom), whole), bottom);
+  });
+
+  test("a finding with no hunk anchors to nothing", () => {
+    assert.equal(focusHunkFor(finding(undefined), entry), undefined);
+  });
 });
