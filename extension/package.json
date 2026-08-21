@@ -107,6 +107,12 @@
         "category": "Chapter Review"
       },
       {
+        "command": "chapterReview.clearReview",
+        "title": "Clear Review",
+        "category": "Chapter Review",
+        "icon": "$(trash)"
+      },
+      {
         "command": "chapterReview.installSkill",
         "title": "Install Skill",
         "category": "Chapter Review"
@@ -147,7 +153,11 @@
         },
         {
           "command": "chapterReview.resetProgress",
-          "when": "view == chapterReview"
+          "when": "view == chapterReview && chapterReview.hasManifest"
+        },
+        {
+          "command": "chapterReview.clearReview",
+          "when": "view == chapterReview && chapterReview.hasManifest"
         },
         {
           "command": "chapterReview.installSkill",
