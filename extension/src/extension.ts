@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
+import { clearReviewState, confirmClear, hasReviewState } from "./clear";
 import { DiffViewer } from "./diffViewer";
 import { FocusStore, focusForNode, resolveFocus } from "./focus";
 import {
@@ -20,12 +21,15 @@ import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, ViewMode } fr
 
 // Relative to the repo's git dir: tool state lives inside .git, invisible to
 // git status and impossible to commit by accident.
-const MANIFEST_PATH = "chapter-review/chapters.json";
+const PROTOCOL_DIR = "chapter-review";
+const MANIFEST_PATH = `${PROTOCOL_DIR}/chapters.json`;
 // Review checkmarks live in their own document, written only here. The manifest
 // belongs to the agent's CLI; when both wrote chapters.json, each side's
 // whole-file read-modify-write could silently drop the other's edit.
-const PROGRESS_PATH = "chapter-review/progress.json";
+const PROGRESS_PATH = `${PROTOCOL_DIR}/progress.json`;
 const VIEW_MODE_KEY = "chapterReview.viewMode";
+// Gates the destructive Clear Review entry in the view's menu.
+const HAS_MANIFEST_KEY = "chapterReview.hasManifest";
 
 // Fingerprint of manifest bytes, so the extension can recognize its own writes.
 const sha = (data: Uint8Array): string => createHash("sha256").update(data).digest("hex");
@@ -60,6 +64,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return; // not a git repo; the view keeps its welcome content
   }
   const gitDirUri = vscode.Uri.file(gitDir);
+  const protocolUri = vscode.Uri.joinPath(gitDirUri, PROTOCOL_DIR);
   const manifestUri = vscode.Uri.joinPath(gitDirUri, MANIFEST_PATH);
   const progressUri = vscode.Uri.joinPath(gitDirUri, PROGRESS_PATH);
 
@@ -88,6 +93,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   function updateSummary(): void {
     const m = provider.manifest;
+    // Set here because this is the one function every manifest transition ends
+    // in, so the key cannot drift from what the view is showing.
+    void vscode.commands.executeCommand("setContext", HAS_MANIFEST_KEY, m !== undefined);
     if (!m) {
       view.description = undefined;
       view.message = undefined;
@@ -264,6 +272,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
+  // Throws the whole review away: the partition, the findings, the checkmarks
+  // and the focus pointer. Confirmed with a modal because a click in the view's
+  // menu is easier to misfire than a typed command, and nothing here is
+  // recoverable afterwards (see clear.ts).
+  async function clearReview(): Promise<void> {
+    if (!(await hasReviewState(protocolUri))) {
+      void vscode.window.showInformationMessage(
+        "Chapter Review: this repository has no review state to clear."
+      );
+      return;
+    }
+    if (!(await confirmClear(provider.manifest))) {
+      return;
+    }
+    try {
+      await clearReviewState(protocolUri);
+    } catch (e) {
+      void vscode.window.showErrorMessage(
+        `Chapter Review: could not clear the review state: ${errorMessage(e)}`
+      );
+      return;
+    }
+    // Repainted from here rather than through the watcher: a file removed along
+    // with its parent directory does not reliably raise onDidDelete.
+    await reload();
+  }
+
   context.subscriptions.push(
     view,
     vscode.workspace.registerTextDocumentContentProvider(
@@ -311,7 +346,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("chapterReview.resetProgress", async () => {
       progress.clear();
       await persistProgress();
-    })
+    }),
+    vscode.commands.registerCommand("chapterReview.clearReview", clearReview)
   );
 
   // Skip reloads caused by our own writes; a CLI write differs and still reloads.
