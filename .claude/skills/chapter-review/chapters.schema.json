@@ -87,11 +87,14 @@
           "pattern": "^ch-[1-9][0-9]*$",
           "description": "Soft grouping: the chapter it was noted under. Positional, so treat path(+hunk) as the real key. Absent means no chapter owns it (a quarantined path), which numbers the finding iss-0.<number>."
         },
-        "severity": { "enum": ["critical", "high", "low"] },
+        "severity": {
+          "enum": ["critical", "high", "low"],
+          "description": "How bad this one finding is, rated on its own harm and never on the harm of whatever sits beside it in the same file or hunk."
+        },
         "note": {
           "type": "string",
           "minLength": 1,
-          "description": "The finding."
+          "description": "The finding: one problem, not two joined into one note. What needs two separate edits is two issues, each with its own severity, in the same hunk included."
         },
         "confidence": {
           "enum": ["suspected", "verified"],
