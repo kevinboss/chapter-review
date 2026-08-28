@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { DigestMap } from "../fingerprint";
+import { chapterTooltip, fileTooltip, issueTooltip, textTooltip } from "../tooltips";
 import {
   allEntries,
   Chapter,
@@ -233,7 +234,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       "warning",
       new vscode.ThemeColor("list.warningForeground")
     );
-    item.tooltip = this.staleness?.detail;
+    item.tooltip = this.staleness?.detail && textTooltip(this.staleness.detail);
     item.command = { command: "chapterReview.refresh", title: "Re-check", arguments: [] };
     return item;
   }
@@ -246,9 +247,10 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     );
     item.id = "dirtyWarning";
     item.iconPath = new vscode.ThemeIcon("pencil", new vscode.ThemeColor("list.warningForeground"));
-    item.tooltip =
+    item.tooltip = textTooltip(
       "The diff shown here is from the last commit, so it does not include your " +
-      "uncommitted edits. Commit them and re-run the chapter-review skill to review them.";
+        "uncommitted edits. Commit them and re-run the chapter-review skill to review them."
+    );
     item.command = { command: "chapterReview.refresh", title: "Re-check", arguments: [] };
     return item;
   }
@@ -273,7 +275,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     item.checkboxState = this.checkbox({ kind: "chapter", chapter });
     // The full id leads the tooltip: the row shows the bare number, and this is
     // where the spelling the CLI takes (`--chapter ch-2`) is available.
-    item.tooltip = [chapter.id, chapter.description].filter(Boolean).join("\n");
+    item.tooltip = chapterTooltip(chapter.id, chapter.description);
     return item;
   }
 
@@ -287,7 +289,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     item.description = `${done}/${total}`;
     item.iconPath = new vscode.ThemeIcon("archive");
     item.checkboxState = this.checkbox({ kind: "unassignedRoot" });
-    item.tooltip = "Noise quarantined by the skill (lockfiles, generated code, autoformat)";
+    item.tooltip = textTooltip(
+      "Noise quarantined by the skill (lockfiles, generated code, autoformat)"
+    );
     return item;
   }
 
@@ -324,9 +328,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
 
     const note = "note" in entry ? entry.note : undefined;
     if (note || entry.oldPath) {
-      item.tooltip = [entry.oldPath && `was ${entry.oldPath}`, note]
-        .filter(Boolean)
-        .join("\n");
+      item.tooltip = fileTooltip(entry.oldPath, note);
     }
 
     item.checkboxState = this.checkbox(node);
@@ -372,7 +374,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     const parts: string[] = [issue.severity, confidence];
     if (resolved) parts.push("resolved");
     item.description = parts.join(" · ");
-    item.tooltip = `${issue.id} · ${issue.severity.toUpperCase()} · ${confidence}${resolved ? " · resolved" : ""}: ${issue.note}\n${issue.path}`;
+    item.tooltip = issueTooltip(issue);
     item.iconPath = issueIcon(issue);
     // Same checkbox affordance as files: ticked means resolved. Its toggle is
     // routed to the manifest (not review progress) by the checkbox handler.
@@ -396,9 +398,10 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     const open = this.orphanIssues().filter(isOpen).length;
     item.description = `${open} open`;
     item.iconPath = new vscode.ThemeIcon("warning");
-    item.tooltip =
+    item.tooltip = textTooltip(
       "Findings no chapter owns: on a quarantined path, or in a chapter this " +
-      "generation dropped. Numbered in the chapter-0 sequence (iss-0.N).";
+        "generation dropped. Numbered in the chapter-0 sequence (iss-0.N)."
+    );
     return item;
   }
 
