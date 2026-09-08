@@ -4,6 +4,42 @@ All notable changes to the Chapter Review extension are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-08
+
+### Added
+- "Discard Review" in the Chapters view removes the whole protocol directory,
+  which used to mean deleting files under `.git` by hand. Confirmed with a
+  modal naming how many findings and checkmarks are at stake, since nothing
+  here is recoverable afterwards.
+- Chapter rows and finding rows show their numbers, so there is something to
+  quote back at the agent.
+
+### Changed
+- Finding ids read `iss-<chapter>.<n>` instead of a branch-wide counter, so an
+  id says where the finding sits rather than how many came before it. A finding
+  that moves to another chapter takes a new number and `write` prints the
+  mapping. Old `iss-N` ids no longer validate: regenerate the manifest.
+- A finding carries one problem, not two. Two problems in one note share a
+  single severity, so the lesser one arrives inflated and one `issue resolve`
+  closes both or neither.
+- `write` now reports findings whose hunk left the diff, which is what an
+  author fixing exactly that hunk produces. Reported rather than resolved:
+  whether the finding still stands needs the diff in front of you.
+
+### Fixed
+- Clicking a finding lands on its changed line rather than three lines of
+  context above it. The same finding used to read right or wrong depending on
+  how its file happened to be partitioned.
+- A finding whose coordinates drifted through a partition rewrite resolves onto
+  the range covering them, instead of opening the file at line 1 as if the
+  finding were there.
+- `issue add` and `issue set` refuse a chapter that does not hold the finding's
+  path, or a range another chapter owns. Both cases used to be undone silently
+  by the next `write`, behind a `renumbered` line that looked like the branch
+  had moved.
+- A row's tooltip stays open when the pointer reaches it, so a finding's note
+  can be read without holding the mouse still.
+
 ## [0.8.1] - 2026-08-03
 
 ### Fixed
@@ -139,6 +175,7 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Skill installer: the extension bundles the chapter-review skill and installs
   it into your coding agent, consent-gated.
 
+[0.10.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.10.0
 [0.8.1]: https://github.com/kevinboss/chapter-review/releases/tag/v0.8.1
 [0.8.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.8.0
 [0.7.3]: https://github.com/kevinboss/chapter-review/releases/tag/v0.7.3
