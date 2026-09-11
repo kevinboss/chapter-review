@@ -63,22 +63,42 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            extension/*.vsix \
-            chapter-review-skill.zip
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              extension/*.vsix \
+              chapter-review-skill.zip \
+              --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes \
+              extension/*.vsix \
+              chapter-review-skill.zip
+          fi
 
       - name: Publish to VS Code Marketplace
         working-directory: extension
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
-          # An unquoted `ls *.vsix` word-splits once a second .vsix exists.
-          shopt -s nullglob
-          vsix=(*.vsix)
-          if [ ${#vsix[@]} -ne 1 ]; then
-            echo "expected exactly one .vsix, found ${#vsix[@]}: ${vsix[*]}" >&2
-            exit 1
-          fi
-          npx vsce publish --packagePath "${vsix[0]}"
+          version=$(node -p "require('./package.json').version")
+
+          on_marketplace() {
+            curl -s -X POST \
+              'https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery' \
+              -H 'Accept: application/json;api-version=3.0-preview.1' \
+              -H 'Content-Type: application/json' \
+              -d '{"filters":[{"criteria":[{"filterType":7,"value":"kevinboss.chapter-review"}]}],"flags":16}' \
+              | grep -q "\"version\":\"$version\""
+          }
+
+          for attempt in 1 2 3; do
+            echo "::group::publish attempt $attempt"
+            npx vsce publish --no-dependencies && exit 0
+            echo "::endgroup::"
+            on_marketplace && exit 0
+            sleep 30
+          done
+
+          echo "::error::$version did not reach the Marketplace after 3 attempts"
+          exit 1
