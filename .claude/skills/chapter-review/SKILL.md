@@ -75,6 +75,8 @@ Commands: `write [file] [--dry-run]` installs a partition draft, `issue add|set|
 
 9. **Record the findings.** Run `chapter-review issue add --path … --severity … --note "…"` once per problem from step 7, so a note you had to join with an "and" is two calls. The owning chapter is inferred from the path; when the path spans several chapters, add `--hunk oldStart,oldLines,newStart,newLines` (selects the chapter owning that range, and pins the finding to it) or `--chapter ch-N` (names the chapter only) — the command warns if it has to guess. Add `--confidence verified` only for findings that met step 7's test — you looked outside the diff to confirm them. Skip this step when the branch is clean.
 
+10. **Hand over at chapter 1.** Relay the `write` summary line, list the chapter titles in order with each one's open finding count, and invite the reviewer to start reading chapter 1. Don't spell out the findings themselves yet; [Walking the chapters](#walking-the-chapters) says when they come up.
+
 ## Regenerating (the branch moved)
 
 Re-running the skill on a branch that already has a manifest is a normal operation: you regenerate after new commits, an amend, a rebase, or a fetch that moved the base. Resolve refs fresh (step 1) and pull the current `mergeBase..HEAD` diff (step 2) as always, but **don't rebuild the partition from scratch. Reconcile against the one that already exists.** Run `chapter-review show` first, then keep each file in the chapter it already lived in and carry that chapter's `id` across; place only genuinely new material, and mint a new chapter id only for a genuinely new grouping. The aim is a targeted update: the manifest changes only where the branch changed.
@@ -103,6 +105,38 @@ The schema states which of these fields are optional and their limits; these are
 ## Schema
 
 The contract is `chapters.schema.json` (draft-07), the worked example is `example-chapters.json`, and `validate.ts` enforces it and wins if the two disagree. All three sit next to this file. The example is a manifest as it looks *after* `issue add` has run, not a draft template: it carries an `issues` array, which `write` refuses in a draft (see step 8), so copy the partition fields out of it and leave `issues` and `issueSeq` to the CLI. **[COMMANDS.md](COMMANDS.md#schema) explains the field semantics**; the one rule you need while partitioning is that a file entry **without** `hunks` claims that file's entire diff, so you only enumerate ranges when a file genuinely splits.
+
+## Walking the chapters
+
+The review goes one chapter at a time, in manifest order.
+Each chapter has two phases: first the reviewer reads the code, then you go through the chapter's findings together.
+Keep them in that order and don't run ahead into the next chapter.
+Findings read before the code shape how the code gets read, which is why step 10 hands over with counts only.
+
+**Reading phase.**
+The reviewer opens the chapter's files and asks questions, which you answer as [Follow-up review](#follow-up-review-focus-driven) describes.
+Answer the question asked and don't bring up the chapter's recorded findings unprompted.
+When a question lands on code a recorded finding already covers, name that finding's id in one line so the reviewer knows it is queued, and keep the discussion for the findings phase.
+When the reviewer raises a new problem, record it with `issue add` right away.
+It lands in whichever chapter owns the path, and that is often not the chapter being read, so say which chapter it went to and carry on with the reading.
+
+**Findings phase.**
+It starts when the reviewer says they are done reading ("done with the files", "let's go through the issues", "findings?").
+Wait for that signal: a focus that wanders into another chapter's file is usually a look for context, not a switch.
+Run `chapter-review issue list` and take the chapter's open findings in id order, the ones added during reading included.
+Present one finding per message: where it sits and the mechanism, against the code as it is now.
+Then wait for the reviewer's decision and apply it before moving on: keep it open as written, revise it (`issue set`), `verify` or `unverify` it, `resolve` it, or `rm` it.
+When the last one is settled, say the chapter is done and name the next chapter, whose reading phase starts next.
+
+**Findings that land behind you.**
+A finding added while reading chapter 4 that belongs to the finished chapter 2 would never get a findings phase of its own.
+Take it up at the end of the current chapter's findings phase, after the chapter's own, and do the same for an `iss-0.N` finding no chapter owns.
+A finding that belongs to a later chapter waits for that chapter.
+
+**Leaving the order.**
+The reviewer can jump to another chapter or ask about a finding out of turn at any point; follow them.
+The chapter they left keeps its open findings for when they come back, and you pick the order up again from there.
+When the last chapter is done, list what is still open, grouped by chapter, so nothing is left without an outcome.
 
 ## Follow-up review (focus-driven)
 
