@@ -33,7 +33,7 @@ Marketplace renders repo-relative image paths from the packaged README.
 
 ## Getting started
 
-1. **Install the skill.** This extension ships the chapter-review skill inside it. Run **Chapter Review: Install Skill** from the Command Palette, or click **Install the skill** in the empty Chapters view, then choose where it goes: `~/.claude/skills/` for every repository, or just the current workspace. Restart your coding agent afterward so it loads the skill. The extension prompts you to update whenever it bundles a newer skill version.
+1. **Install the skill.** This extension ships the chapter-review skill inside it. Run **Chapter Review: Install Skill** from the Command Palette, or click **Install the skill** in the empty Chapters view, then choose where it goes: `~/.claude/skills/` for every repository, or just the current workspace. The same step registers the skill's MCP server with Claude Code, so the agent can call the review commands as tools; this needs the `claude` command on PATH, and without it the skill still installs and you get the command to run yourself. Restart your coding agent afterward so it loads the skill. The extension prompts you to update whenever it bundles a newer skill version.
 2. In your coding agent, run the chapter-review skill on the branch you want to review. It writes the chapter manifest.
 3. Click the **Chapter Review** icon in the activity bar. The **Chapters** view lists the chapters; expand one to see its files and hunks.
 4. Click a file or hunk to open its diff, scoped to that chapter. Tick the checkboxes as you review; progress is saved per hunk. Tick a chapter or folder to complete everything beneath it at once, and tick an issue to mark it resolved.

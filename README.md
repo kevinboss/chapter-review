@@ -28,7 +28,7 @@ The extension is purely a review surface.
 ## Installing
 
 1. **Install the extension** — get **Chapter Review** from the [VSCode Marketplace](https://marketplace.visualstudio.com/items?itemName=kevinboss.chapter-review), or download `chapter-review-<version>.vsix` from [Releases](https://github.com/kevinboss/chapter-review/releases) and run "Extensions: Install from VSIX…" in VSCode (or `code --install-extension <file>.vsix`).
-2. **Install the skill** — the extension bundles it. Run **Chapter Review: Install Skill** from the Command Palette (or click **Install the skill** in the empty Chapters view) and pick a location: `~/.claude/skills/` for every repo, or the current workspace only. Restart your coding agent so it loads the skill; the extension prompts you to update whenever your copy differs from the one it carries.
+2. **Install the skill** — the extension bundles it. Run **Chapter Review: Install Skill** from the Command Palette (or click **Install the skill** in the empty Chapters view) and pick a location: `~/.claude/skills/` for every repo, or the current workspace only. The same step registers the skill's MCP server with Claude Code (`claude mcp add`, at user scope or at local scope for a workspace install), which lets the agent call the commands as typed tools; if the `claude` command isn't on PATH, the skill still installs and the notification offers the command to copy. Restart your coding agent so it loads the skill; the extension prompts you to update whenever your copy differs from the one it carries.
 
 Installing the skill by hand instead: copy `.claude/skills/chapter-review/` into your repo's `.claude/skills/`, or unzip `chapter-review-skill.zip` from a release there. It needs `git` and `node` 22.18 or newer.
 
@@ -38,11 +38,11 @@ Every push to `main` publishes a pre-release build to the Marketplace. To ride i
 
 ## Repository layout
 
-- **`.claude/skills/chapter-review/`** — the Claude Code skill and its self-contained contract. Partitions the current branch's diff into chapters and writes the manifest to `<git-dir>/chapter-review/chapters.json` in the target repo (inside `.git`, so the worktree and git status stay clean). The folder bundles everything it needs: `SKILL.md`, the `chapter-review` CLI (TypeScript, no build step), `chapters.schema.json` (draft-07 contract), `validate.ts` (zero-dependency validator, authoritative), and `example-chapters.json` (worked example). Copy the folder into any repo's `.claude/skills/` to install; `git` and `node` 22.18 or newer are required.
+- **`.claude/skills/chapter-review/`** — the Claude Code skill and its self-contained contract. Partitions the current branch's diff into chapters and writes the manifest to `<git-dir>/chapter-review/chapters.json` in the target repo (inside `.git`, so the worktree and git status stay clean). The folder bundles everything it needs: `SKILL.md`, the `chapter-review` CLI (TypeScript, no build step), `mcp.ts` (the same commands as an MCP server, zero dependencies), `chapters.schema.json` (draft-07 contract), `validate.ts` (zero-dependency validator, authoritative), and `example-chapters.json` (worked example). Copy the folder into any repo's `.claude/skills/` to install; `git` and `node` 22.18 or newer are required.
 - **`.claude/skills/demo/`** — `/demo` skill: rebuild the C# demo, generate its manifest via the chapter-review skill in a sub-agent, launch the extension dev host.
 - **`scripts/`** — `make-demo.ts` builds the demo repo.
 - **Tooling** — `eslint.config.ts` (flat config, typescript-eslint strict-type-checked with typed linting) plus four `tsconfig.json` projects covering the skill CLI, the extension, the extension's build scripts, and the root scripts/tests. `npm run lint` and `npm run typecheck` gate both in CI. These are dev-only: the skill folder still runs with no install.
-- **`test/`** — `node:test` suites: `validate.test.ts` covers the validator, `cli.test.ts` drives the CLI end-to-end against throwaway git repos. Run with `npm test`.
+- **`test/`** — `node:test` suites: `validate.test.ts` covers the validator, `write`, `issues` and `progress` drive the CLI end-to-end against throwaway git repos, and `mcp.test.ts` drives the MCP server the same way. Run with `npm test`.
 - **`extension/`** — VSCode extension that renders `chapters.json` as a tree (list + tree views), opens diffs on click in the same style as the native git history, and tracks review progress per hunk.
 
 ## Design decisions
