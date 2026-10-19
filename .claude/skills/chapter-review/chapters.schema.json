@@ -67,6 +67,8 @@
       "type": "object",
       "required": ["id", "path", "severity", "note"],
       "additionalProperties": false,
+      "dependencies": { "cause": ["line"] },
+      "not": { "anyOf": [{ "required": ["line", "hunk"] }, { "required": ["line", "oldPath"] }] },
       "properties": {
         "id": {
           "type": "string",
@@ -75,12 +77,27 @@
         },
         "path": {
           "$ref": "#/definitions/path",
-          "description": "File the issue is about. With hunk, this is the durable key that survives regeneration."
+          "description": "File the issue is about. With hunk, this is the durable key that survives regeneration. With line, a file the branch does not change but left wrong (a stale doc, a forgotten caller)."
         },
         "oldPath": { "$ref": "#/definitions/path" },
         "hunk": {
           "$ref": "#/definitions/hunk",
           "description": "Optional: the specific hunk the issue concerns, for line-level findings."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based line in the file at headSha. Present exactly when path is outside the diff, so it never appears with hunk or oldPath, which describe a change."
+        },
+        "cause": {
+          "type": "object",
+          "required": ["path"],
+          "additionalProperties": false,
+          "description": "For a finding outside the diff: the change in the diff that left the file wrong. The finding's chapter is the one that owns this change, and is re-read off it on every write. Absent means no chapter owns the finding.",
+          "properties": {
+            "path": { "$ref": "#/definitions/path" },
+            "hunk": { "$ref": "#/definitions/hunk" }
+          }
         },
         "chapterId": {
           "type": "string",

@@ -103,9 +103,27 @@ suite("focusForNode", () => {
       path: "b.txt",
       oldPath: undefined,
       hunk,
+      line: undefined,
       chapterId: "ch-2",
       issueId: "iss-2.3",
     });
+  });
+
+  test("a finding outside the diff carries its own line", () => {
+    const node: Node = {
+      kind: "issue",
+      issue: {
+        id: "iss-2.4",
+        path: "doc.md",
+        line: 89,
+        cause: { path: "b.txt" },
+        chapterId: "ch-2",
+        severity: "low",
+        note: "stale",
+      },
+    };
+    assert.equal(focusForNode(node)?.line, 89);
+    assert.equal(focusForNode(node)?.path, "doc.md");
   });
 
   test("a renamed entry carries the pre-rename path, so the before side resolves", () => {
@@ -147,6 +165,17 @@ suite("resolveFocus", () => {
         anchor({ oldStart: 3, oldLines: 3, newStart: 3, newLines: 3 })
       );
       assert.equal(focus.line, 5, "the first line that differs, not newStart");
+    }));
+
+  test("a line already resolved is written as it is", () =>
+    withFixture(async (fx) => {
+      const focus = await resolveFocus(fx.dir, fx.manifest, {
+        path: "doc.md",
+        line: 89,
+        chapterId: "ch-1",
+        issueId: "iss-1.1",
+      });
+      assert.deepEqual(focus, { path: "doc.md", line: 89, chapterId: "ch-1", issueId: "iss-1.1" });
     }));
 
   test("a hunk with no leading context keeps its own start", () =>

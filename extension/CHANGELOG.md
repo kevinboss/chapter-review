@@ -11,6 +11,10 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
   The agent passes the repository and the draft as fields instead of assembling a `node <path>/chapter-review` line, and the server runs one call at a time.
 - Installing or updating the skill also registers that server with Claude Code: at user scope for a user install, at local scope for a workspace install, so no committed `.mcp.json` is touched.
   Without the `claude` command on PATH the skill still installs, and the notification offers the command to copy.
+- Findings on a file the branch left wrong without changing it, such as a stale doc or a forgotten caller.
+  `issue add --path <file> --line <n> --cause-path <changed file>` records one on the stale file itself, filed under the chapter of the change that caused it.
+  The row says "outside the diff", and clicking it opens the file as reviewed, on that line.
+  These used to be anchored on the changed file with the real location only in the note, so clicking one opened code it was not about.
 
 ## [0.10.0] - 2026-09-08
 

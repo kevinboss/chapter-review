@@ -2,9 +2,10 @@
 // so these assert on the tabs VS Code ends up showing rather than on a spy.
 
 import * as assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import * as vscode from "vscode";
 import { DiffViewer, focusHunkFor } from "../../diffViewer";
-import { GIT_SCHEME, PATCHED_SCHEME, PatchedContentProvider } from "../../gitContent";
+import { GIT_SCHEME, gitUri, PATCHED_SCHEME, PatchedContentProvider } from "../../gitContent";
 import { withFixture, Fixture } from "../fixture";
 import type { FileEntry, Hunk, Issue, Manifest } from "../../model";
 
@@ -147,6 +148,52 @@ suite("diff viewer", () => {
       assert.equal(single.scheme, "file", "a plain editor, not a diff");
       assert.match(single.path, /a\.txt$/);
     }));
+
+  test("a finding outside the diff opens its file at the reviewed commit, on its line", () =>
+    withFixture(async (fx) => {
+      await viewerFor(fx, fx.manifest).openIssue({
+        kind: "issue",
+        issue: {
+          id: "iss-2.1",
+          path: "a.txt",
+          line: 5,
+          cause: { path: "b.txt" },
+          chapterId: "ch-2",
+          severity: "low",
+          note: "stale",
+        },
+      });
+
+      // The cursor line is asserted in the next test: the git content provider
+      // serves the workspace's repo, not the fixture's, so this document is empty.
+      const { single } = activeTab();
+      assert.equal(single?.scheme, GIT_SCHEME, "the file as reviewed, neither a diff nor the working copy");
+      assert.equal(single.toString(), gitUri(fx.manifest.headSha ?? fx.manifest.head, "a.txt").toString());
+    }));
+
+  test("a finding outside the diff puts the cursor on its line", async () => {
+    const ws = vscode.workspace.workspaceFolders?.[0];
+    assert.ok(ws, "the host tests run against a workspace");
+    const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws.uri.fsPath, encoding: "utf8" }).trim();
+    const manifest: Manifest = {
+      version: 1,
+      base: "main",
+      head: "feat",
+      mergeBase: headSha,
+      headSha,
+      generatedAt: "2026-10-19T10:00:00Z",
+      chapters: [],
+      unassigned: [],
+    };
+    await new DiffViewer(ws.uri, new PatchedContentProvider(), () => manifest).openIssue({
+      kind: "issue",
+      issue: { id: "iss-0.1", path: "a.txt", line: 5, severity: "low", note: "stale" },
+    });
+
+    const editor = vscode.window.activeTextEditor;
+    assert.equal(editor?.document.lineAt(4).text, "L5", "the workspace's a.txt at HEAD");
+    assert.equal(editor.selection.active.line, 4);
+  });
 
   test("a finding pinned to a range the chapter dropped still opens the diff", () =>
     withFixture(async (fx) => {

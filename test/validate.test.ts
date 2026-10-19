@@ -115,6 +115,41 @@ const cases: Case[] = [
   { name: "issueSeq keyed by chapter number is valid", mutate: (m) => (m.issueSeq = { "0": 1, "2": 3 }), expectError: null },
   { name: "issueSeq keyed by chapter id", mutate: (m) => (m.issueSeq = { "ch-2": 3 }), expectError: "must be a chapter number" },
   { name: "issueSeq with a zero mark", mutate: (m) => (m.issueSeq = { "2": 0 }), expectError: "positive integer" },
+  {
+    name: "issue outside the diff, with a line and a cause, is valid",
+    mutate: (m) => {
+      m.issues[0].hunk = undefined;
+      m.issues[0].line = 89;
+      m.issues[0].cause = { path: "docs/adr.md", hunk: { oldStart: 1, oldLines: 2, newStart: 1, newLines: 3 } };
+    },
+    expectError: null,
+  },
+  {
+    name: "issue with both a line and a hunk",
+    mutate: (m) => {
+      m.issues[0].hunk = { oldStart: 1, oldLines: 2, newStart: 1, newLines: 3 };
+      m.issues[0].line = 4;
+    },
+    expectError: "cannot carry a hunk or oldPath",
+  },
+  {
+    name: "issue line of 0",
+    mutate: (m) => {
+      m.issues[0].hunk = undefined;
+      m.issues[0].line = 0;
+    },
+    expectError: "integer from 1",
+  },
+  { name: "issue cause without a line", mutate: (m) => (m.issues[0].cause = { path: "docs/adr.md" }), expectError: "applies only to a finding outside the diff" },
+  {
+    name: "issue cause with an unknown field",
+    mutate: (m) => {
+      m.issues[0].hunk = undefined;
+      m.issues[0].line = 1;
+      m.issues[0].cause = { path: "docs/adr.md", why: "moved" };
+    },
+    expectError: "unknown property",
+  },
   // Checkmarks live in progress.json alone; the manifest has no `reviewed` key.
   { name: "reviewed in the manifest is rejected", mutate: (m) => (m.reviewed = [{ path: "src/auth/oidc.ts", digest: "abcd1234" }]), expectError: "unknown property" },
 ];

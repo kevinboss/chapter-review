@@ -7,7 +7,7 @@ import path from "node:path";
 import { die, errorMessage, isArray, isRecord, tryReadJson, withoutUndefined } from "./util.ts";
 import { manifestPath, progressPath } from "./git.ts";
 import { isManifest, validateManifest } from "./validate.ts";
-import type { FileEntry, Hunk, Issue, Manifest, ManifestStats, Progress, ReviewedUnit } from "./types.ts";
+import type { Cause, FileEntry, Hunk, Issue, Manifest, ManifestStats, Progress, ReviewedUnit } from "./types.ts";
 /**
  * Read the stored manifest if it is present, parseable and valid; null otherwise.
  *
@@ -300,34 +300,48 @@ export function ownerChapterId(
  * into ranges and none of them covers the finding any more, which is what a fix
  * landing on the reviewed hunk leaves behind. They are kept, since the finding may
  * still stand, but the caller has to say so — the coordinates now point into code
- * the partition does not claim, and only this run knows it happened.
+ * the partition does not claim, and only this run knows it happened. A finding
+ * outside the diff is checked the same way through its cause.
+ *
+ * A finding outside the diff is kept while its file exists at the new head
+ * (`fileAtHead`) and the branch still leaves it alone. Once the branch changes the
+ * file, the finding becomes an ordinary one on it, listed in `entered`: the edit
+ * may be the fix, and only a reading of it can say. A cause that left the diff is
+ * dropped and listed in `uncaused`, leaving the finding with no chapter.
  */
 export function carryIssues(
   oldIssues: Issue[],
   newManifest: Manifest,
-  prior?: Manifest | null
+  prior: Manifest | null | undefined,
+  fileAtHead: (p: string) => boolean
 ): {
   kept: Issue[];
   pruned: string[];
   moved: string[];
   renumbered: string[];
   unanchored: string[];
+  entered: string[];
+  uncaused: string[];
 } {
   const kept: Issue[] = [];
   const pruned: string[] = [];
   const moved: string[] = [];
   const renumbered: string[] = [];
   const unanchored: string[] = [];
+  const entered: string[] = [];
+  const uncaused: string[] = [];
   const allocate = issueIdAllocator(issueHighWater(prior, oldIssues));
   for (const issue of oldIssues) {
-    const path = currentPathFor(newManifest, issue.path, prior);
-    if (path === undefined) {
+    const placed =
+      issue.line === undefined
+        ? placeInDiff(issue, newManifest, prior)
+        : placeOutside(issue, newManifest, prior, fileAtHead);
+    if (placed === undefined) {
       pruned.push(issue.id);
       continue;
     }
-    if (path !== issue.path) moved.push(`${issue.id}: ${issue.path} -> ${path}`);
-    const hunk = issue.hunk === undefined ? undefined : rekey(newManifest, path, issue.hunk);
-    const chapterId = ownerChapterId(newManifest, path, hunk, issue.chapterId);
+    const { path, chapterId } = placed;
+    if (placed.renamedFrom !== undefined) moved.push(`${issue.id}: ${placed.renamedFrom} -> ${path}`);
     const sameChapter = issueBucket(chapterId) === issueBucket(issue.chapterId);
     const id = sameChapter ? issue.id : allocate(chapterId);
     if (!sameChapter) {
@@ -335,16 +349,90 @@ export function carryIssues(
     }
     // After renumbering, since the id named here is the one the caller has to
     // pass back and a re-homed finding no longer answers to its old number.
-    if (hunk !== undefined && !anchorResolves(newManifest, path, hunk)) {
-      unanchored.push(`${id}: ${path} ${hunkHeader(hunk)}`);
-    }
-    kept.push(withoutUndefined({ ...issue, id, path, hunk, chapterId }));
+    if (placed.loose !== undefined) unanchored.push(`${id}: ${placed.loose}`);
+    if (placed.entered) entered.push(`${id}: ${path}`);
+    if (placed.lostCause !== undefined) uncaused.push(`${id}: ${placed.lostCause}`);
+    kept.push(
+      withoutUndefined({
+        ...issue,
+        id,
+        path,
+        hunk: placed.hunk,
+        line: placed.line,
+        cause: placed.cause,
+        chapterId,
+      })
+    );
   }
-  return { kept, pruned, moved, renumbered, unanchored };
+  return { kept, pruned, moved, renumbered, unanchored, entered, uncaused };
+}
+
+/** Where a carried finding lands, and what about the move the caller must report. */
+interface Placement {
+  path: string;
+  hunk?: Hunk;
+  line?: number;
+  cause?: Cause;
+  chapterId?: string;
+  renamedFrom?: string;
+  /** The location of a range no chapter claims any more, the anchor's or the cause's. */
+  loose?: string;
+  entered?: boolean;
+  lostCause?: string;
+}
+
+function placeInDiff(
+  issue: Issue,
+  manifest: Manifest,
+  prior: Manifest | null | undefined
+): Placement | undefined {
+  const path = currentPathFor(manifest, issue.path, prior);
+  if (path === undefined) return undefined;
+  const hunk = issue.hunk === undefined ? undefined : rekey(manifest, path, issue.hunk);
+  return {
+    path,
+    hunk,
+    chapterId: ownerChapterId(manifest, path, hunk, issue.chapterId),
+    renamedFrom: path === issue.path ? undefined : issue.path,
+    loose:
+      hunk !== undefined && !anchorResolves(manifest, path, hunk)
+        ? `${path} ${hunkHeader(hunk)}`
+        : undefined,
+  };
+}
+
+function placeOutside(
+  issue: Issue,
+  manifest: Manifest,
+  prior: Manifest | null | undefined,
+  fileAtHead: (p: string) => boolean
+): Placement | undefined {
+  const changed = currentPathFor(manifest, issue.path, prior);
+  if (changed !== undefined) {
+    return { path: changed, chapterId: ownerChapterId(manifest, changed), entered: true };
+  }
+  if (!fileAtHead(issue.path)) return undefined;
+  const causePath =
+    issue.cause === undefined ? undefined : currentPathFor(manifest, issue.cause.path, prior);
+  if (issue.cause === undefined || causePath === undefined) {
+    return { path: issue.path, line: issue.line, lostCause: issue.cause?.path };
+  }
+  const causeHunk =
+    issue.cause.hunk === undefined ? undefined : rekey(manifest, causePath, issue.cause.hunk);
+  return {
+    path: issue.path,
+    line: issue.line,
+    cause: withoutUndefined({ path: causePath, hunk: causeHunk }),
+    chapterId: ownerChapterId(manifest, causePath, causeHunk, issue.chapterId),
+    loose:
+      causeHunk !== undefined && !anchorResolves(manifest, causePath, causeHunk)
+        ? `caused by ${causePath} ${hunkHeader(causeHunk)}`
+        : undefined,
+  };
 }
 
 /** A hunk as a unified-diff header, the spelling `issue list` uses. */
-const hunkHeader = (h: Hunk): string =>
+export const hunkHeader = (h: Hunk): string =>
   `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`;
 
 /**

@@ -59,15 +59,36 @@ function optBoolean(args: Args, key: string): boolean | undefined {
 const HUNK_KEYS = ["oldStart", "oldLines", "newStart", "newLines"] as const;
 
 /** A hunk object in the CLI's `--hunk` spelling. The CLI validates the numbers. */
-function optHunk(args: Args): string | undefined {
-  const value = args.hunk;
+function hunkSpec(value: unknown, key: string): string | undefined {
   if (value === undefined) return undefined;
-  if (!isRecord(value)) throw new Error("hunk must be an object");
+  if (!isRecord(value)) throw new Error(`${key} must be an object`);
   const parts = HUNK_KEYS.map((k) => value[k]);
   if (!parts.every((n): n is number => typeof n === "number")) {
-    throw new Error(`hunk needs numeric ${HUNK_KEYS.join(", ")}`);
+    throw new Error(`${key} needs numeric ${HUNK_KEYS.join(", ")}`);
   }
   return parts.map(String).join(",");
+}
+
+const optHunk = (args: Args): string | undefined => hunkSpec(args.hunk, "hunk");
+
+function optLine(args: Args): string | undefined {
+  const value = args.line;
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") throw new Error("line must be a number");
+  return String(value);
+}
+
+function causeFlags(args: Args): string[] {
+  const value = args.cause;
+  if (value === undefined) return [];
+  if (!isRecord(value) || typeof value.path !== "string") {
+    throw new Error("cause must be an object with a path");
+  }
+  return [
+    "--cause-path",
+    value.path,
+    ...flag("--cause-hunk", hunkSpec(value.hunk, "cause.hunk")),
+  ];
 }
 
 const flag = (name: string, value: string | undefined): string[] =>
@@ -82,6 +103,8 @@ const issueFlags = (args: Args): string[] => [
   ...flag("--hunk", optHunk(args)),
   ...flag("--old-path", optString(args, "old_path")),
   ...flag("--status", optString(args, "status")),
+  ...flag("--line", optLine(args)),
+  ...causeFlags(args),
 ];
 
 const ACTIONS = ["resolve", "reopen", "verify", "unverify", "rm"];
@@ -96,7 +119,24 @@ const HUNK = {
 };
 const ID = { type: "string", description: "A finding id, e.g. iss-2.1." };
 const ISSUE_FIELDS = {
-  path: PATH,
+  path: {
+    type: "string",
+    description:
+      "Repo-relative path of the file the finding is about: a file in the diff, or with `line` a file the branch left wrong without changing it.",
+  },
+  line: {
+    type: "integer",
+    minimum: 1,
+    description: "For a `path` outside the diff: the line at the reviewed commit. Never with `hunk`.",
+  },
+  cause: {
+    type: "object",
+    description:
+      "For a finding outside the diff: the change in the diff that left the file wrong. Its chapter becomes the finding's.",
+    properties: { path: PATH, hunk: HUNK },
+    required: ["path"],
+    additionalProperties: false,
+  },
   severity: { type: "string", enum: ["critical", "high", "low"] },
   note: { type: "string", description: "One problem, one line." },
   confidence: { type: "string", enum: ["suspected", "verified"] },

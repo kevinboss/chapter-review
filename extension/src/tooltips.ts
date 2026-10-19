@@ -25,9 +25,17 @@ const SEVERITY_BACKGROUND: Record<IssueSeverity, string> = {
   low: "--vscode-inputValidation-infoBackground",
 };
 
-/** Finding row: severity, id, the full note, and the path the row omits. */
+/**
+ * Finding row: severity, id, the full note, and the path the row omits. A finding
+ * outside the diff adds its line and the change that caused it.
+ */
 export function issueTooltip(issue: Issue): vscode.MarkdownString {
-  return tooltip([header(issue), escapeHtml(issue.note), `\`${escapeHtml(issue.path)}\``]);
+  const where =
+    issue.line === undefined
+      ? `\`${escapeHtml(issue.path)}\``
+      : `\`${escapeHtml(`${issue.path}:${String(issue.line)}`)}\` · outside the diff`;
+  const cause = issue.cause && `caused by \`${escapeHtml(issue.cause.path)}\``;
+  return tooltip([header(issue), escapeHtml(issue.note), where, cause]);
 }
 
 /** Chapter row: the id the CLI takes, then the chapter's own summary. */

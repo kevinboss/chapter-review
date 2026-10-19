@@ -58,6 +58,12 @@ suite("row tooltips", () => {
     assert.match(value, /verified/);
   });
 
+  test("a finding outside the diff shows its line and its cause", () => {
+    const { value } = issueTooltip({ ...FINDING, line: 89, cause: { path: "src/b.txt" } });
+    assert.match(value, /`src\/a\.txt:89` · outside the diff/);
+    assert.match(value, /caused by `src\/b\.txt`/);
+  });
+
   test("a resolved finding says so", () => {
     assert.match(issueTooltip({ ...FINDING, status: "resolved" }).value, /resolved/);
   });

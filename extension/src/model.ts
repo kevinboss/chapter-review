@@ -40,12 +40,23 @@ export type IssueStatus = "open" | "resolved";
 /** Whether the finding's premise has been checked. Omitted defaults to "suspected". */
 export type IssueConfidence = "suspected" | "verified";
 
-/** A review finding the skill recorded. Grouped by chapterId, anchored to path(+hunk). */
+/** The change in the diff that left a file outside it wrong. */
+export interface Cause {
+  path: string;
+  hunk?: Hunk;
+}
+
+/**
+ * A review finding the skill recorded. Grouped by chapterId, anchored to
+ * path(+hunk), or to path and line for a file the branch does not change.
+ */
 export interface Issue {
   id: string;
   path: string;
   oldPath?: string;
   hunk?: Hunk;
+  line?: number;
+  cause?: Cause;
   chapterId?: string;
   severity: IssueSeverity;
   note: string;

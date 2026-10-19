@@ -339,10 +339,12 @@ function installDraft(
     );
   }
   const priorIssues: Issue[] = issuesOf(prior);
-  const { kept, pruned, moved, renumbered, unanchored } = carryIssues(
+  const at = asManifest.headSha ?? "HEAD";
+  const { kept, pruned, moved, renumbered, unanchored, entered, uncaused } = carryIssues(
     priorIssues,
     asManifest,
-    prior
+    prior,
+    (p) => gitOk("cat-file", "-e", `${at}:${p}`)
   );
 
   // From the issues as they were *before* pruning, so an id regeneration drops
@@ -420,6 +422,20 @@ function installDraft(
         "    Re-read each one: `issue resolve` it if the change it named is gone, or " +
           "`issue set <id> --hunk` onto the range it belongs to now."
       );
+    }
+    if (entered.length > 0) {
+      console.log(
+        `  ${entered.length} finding${entered.length === 1 ? "" : "s"} outside the diff ` +
+          "on a file the branch now changes, re-anchored to the whole file:"
+      );
+      for (const e of entered) console.log(`    ${e}`);
+      console.log(
+        "    Read each change: `issue resolve` the finding if it was the fix, or " +
+          "`issue set <id> --hunk` onto the range it is about."
+      );
+    }
+    for (const u of uncaused) {
+      console.log(`  lost its cause ${u} left the diff, so no chapter owns the finding`);
     }
     if (repinned.length > 0) {
       console.log(`  re-pinned ${repinned.join(", ")} to match the working tree`);

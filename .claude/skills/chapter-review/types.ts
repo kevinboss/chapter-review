@@ -30,11 +30,24 @@ export interface Chapter {
   files: FileEntry[];
 }
 
+/** The change in the diff that left a file outside it wrong. */
+export interface Cause {
+  path: string;
+  hunk?: Hunk;
+}
+
 export interface Issue {
   id: string;
   path: string;
   oldPath?: string;
   hunk?: Hunk;
+  /**
+   * 1-based line in the file at headSha, for a finding on a file the branch does
+   * not change. Present exactly when the finding sits outside the diff.
+   */
+  line?: number;
+  /** For a finding outside the diff: the change responsible, which picks its chapter. */
+  cause?: Cause;
   chapterId?: string;
   severity: Severity;
   note: string;
