@@ -4,7 +4,7 @@ All notable changes to the Chapter Review extension are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-10-19
 
 ### Added
 - The skill ships an MCP server, `mcp.ts`, offering its commands as typed tools.
@@ -15,6 +15,11 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `issue add --path <file> --line <n> --cause-path <changed file>` records one on the stale file itself, filed under the chapter of the change that caused it.
   The row says "outside the diff", and clicking it opens the file as reviewed, on that line.
   These used to be anchored on the changed file with the real location only in the note, so clicking one opened code it was not about.
+
+### Changed
+- The skill paces a review one chapter at a time: you read a chapter's code first and discuss its findings afterwards.
+  The handover gives only the number of findings per chapter, since findings shown up front shape how the code gets read.
+  A finding raised while reading that belongs to a chapter you already finished is taken up at the end of the current one, so it still gets discussed.
 
 ## [0.10.0] - 2026-09-08
 
@@ -187,6 +192,7 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Skill installer: the extension bundles the chapter-review skill and installs
   it into your coding agent, consent-gated.
 
+[0.12.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.12.0
 [0.10.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.10.0
 [0.8.1]: https://github.com/kevinboss/chapter-review/releases/tag/v0.8.1
 [0.8.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.8.0
