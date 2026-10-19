@@ -4,6 +4,14 @@ All notable changes to the Chapter Review extension are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- The skill ships an MCP server, `mcp.ts`, offering its commands as typed tools.
+  The agent passes the repository and the draft as fields instead of assembling a `node <path>/chapter-review` line, and the server runs one call at a time.
+- Installing or updating the skill also registers that server with Claude Code: at user scope for a user install, at local scope for a workspace install, so no committed `.mcp.json` is touched.
+  Without the `claude` command on PATH the skill still installs, and the notification offers the command to copy.
+
 ## [0.10.0] - 2026-09-08
 
 ### Added

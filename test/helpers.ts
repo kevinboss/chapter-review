@@ -146,7 +146,10 @@ function isReviewedUnits(v: unknown): v is ReviewedUnit[] {
  * test happens to poke at, which is noise rather than safety in a test.
  */
 // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion, @typescript-eslint/no-unnecessary-type-parameters
-export const readJsonAs = <T>(p: string): T => JSON.parse(readFileSync(p, "utf8")) as T;
+export const parseJsonAs = <T>(text: string): T => JSON.parse(text) as T;
+
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters
+export const readJsonAs = <T>(p: string): T => parseJsonAs<T>(readFileSync(p, "utf8"));
 
 /** Run `body(repo)` against a fresh fixture repo, always cleaning up after. */
 export function withRepo(body: (repo: TestRepo) => void): void {

@@ -82,7 +82,7 @@ jobs:
         # the real package contents, then run what it would install.
         run: |
           npx vsce ls --no-dependencies > /tmp/vsix-files.txt
-          for f in main.ts validate.ts cmd-write.ts manifest.ts diff.ts git.ts flags.ts util.ts types.ts chapter-review package.json; do
+          for f in main.ts mcp.ts validate.ts cmd-write.ts manifest.ts diff.ts git.ts flags.ts util.ts types.ts chapter-review package.json; do
             grep -qx "skill/$f" /tmp/vsix-files.txt || { echo "MISSING from .vsix: skill/$f"; exit 1; }
           done
           rm -rf /tmp/vsix-skill && mkdir -p /tmp/vsix-skill
@@ -91,6 +91,8 @@ jobs:
           done < /tmp/vsix-files.txt
           node /tmp/vsix-skill/chapter-review --help
           node /tmp/vsix-skill/validate.ts /tmp/vsix-skill/example-chapters.json
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+            | node /tmp/vsix-skill/mcp.ts | grep -q '"serverInfo"'
 
   # Every push to main that is not a stable release publishes a pre-release, so
   # anyone opted into the pre-release channel tracks main. Gated on both jobs

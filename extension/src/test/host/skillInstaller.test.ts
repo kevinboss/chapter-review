@@ -1,5 +1,6 @@
 // The install decision, not the install. Everything here is read-only: the home
-// directory is injected so a test can never reach the real ~/.claude/skills.
+// directory is injected so a test can never reach the real ~/.claude/skills, and
+// the claude runner is injected so no test registers a real MCP server.
 
 import * as assert from "node:assert/strict";
 import * as os from "node:os";
@@ -8,6 +9,7 @@ import {
   computeSkillStatus,
   installSkill,
   installTargets,
+  type ClaudeRunner,
   type SkillStamp,
 } from "../../skillInstaller";
 
@@ -44,25 +46,42 @@ suite("installing the skill", () => {
   // Only the workspace scope, and the workspace is the harness's temp repo, so
   // this never approaches the real ~/.claude/skills. Naming a scope also skips
   // the QuickPick, which is the only interactive step on this path.
-  test("copies a runnable skill into the workspace", async () => {
+  test("copies a runnable skill into the workspace and registers its MCP server", async () => {
     const ext = vscode.extensions.getExtension("kevinboss.chapter-review");
     assert.ok(ext);
     const ws = vscode.workspace.workspaceFolders?.[0];
     assert.ok(ws);
     const dest = vscode.Uri.joinPath(ws.uri, ".claude", "skills", "chapter-review");
+    const calls: { args: string[]; cwd: string }[] = [];
+    const runClaude: ClaudeRunner = (args, cwd) => {
+      calls.push({ args, cwd });
+      return Promise.resolve({ ok: true });
+    };
 
     // Not awaited: writeSkill ends on a notification that waits for a click,
     // which nothing here will give it. The copy happens before that await.
-    void installSkill({ extensionUri: ext.extensionUri }, "workspace");
+    void installSkill({ extensionUri: ext.extensionUri, runClaude }, "workspace");
 
     // The pieces the CLI needs at runtime, not just the doc. Waited on as a set:
     // copyDir writes them one at a time, so any single file arriving proves
     // nothing about the rest.
     const skillMd = vscode.Uri.joinPath(dest, "SKILL.md");
     await waitFor(async () => {
-      for (const name of ["SKILL.md", "chapter-review", "main.ts", "validate.ts", "diff.ts", "package.json"]) {
+      for (const name of ["SKILL.md", "chapter-review", "main.ts", "mcp.ts", "validate.ts", "diff.ts", "package.json"]) {
         await vscode.workspace.fs.stat(vscode.Uri.joinPath(dest, name));
       }
+    });
+    await waitFor(() => (calls.length === 2 ? Promise.resolve() : Promise.reject(new Error("pending"))));
+    assert.deepEqual(calls[0], {
+      args: ["mcp", "remove", "--scope", "local", "chapter-review"],
+      cwd: ws.uri.fsPath,
+    });
+    assert.deepEqual(calls[1], {
+      args: [
+        "mcp", "add", "--scope", "local", "chapter-review", "--",
+        "node", vscode.Uri.joinPath(dest, "mcp.ts").fsPath,
+      ],
+      cwd: ws.uri.fsPath,
     });
 
     const text = Buffer.from(await vscode.workspace.fs.readFile(skillMd)).toString("utf8");

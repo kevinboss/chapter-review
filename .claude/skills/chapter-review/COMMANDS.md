@@ -14,6 +14,29 @@ In a nested-repo layout (a repo that contains another repo, like a `demo/` fixtu
 `write` prints the path it wrote, so check it.
 Requirements are `git` and `node` (22.18 or newer) on PATH.
 
+### As MCP tools
+
+`mcp.ts` next to `SKILL.md` serves the same commands as MCP tools over stdio.
+Each tool call runs the command below and returns its output, with `isError` set when it exits non-zero, so everything in this file holds for the tools too.
+
+| Tool | Command |
+| --- | --- |
+| `focus` | `focus` |
+| `show` | `show` |
+| `base_check` | `base-check [base]` |
+| `write` | `write [file] [--dry-run]`, with the draft as `draft` (an object) or `file`, and `dry_run` |
+| `uncheck` | `uncheck --path [--hunk]` |
+| `issue_add` | `issue add` |
+| `issue_set` | `issue set <id>` |
+| `issue_update` | `issue <action> <id>`, `action` being `resolve`, `reopen`, `verify`, `unverify` or `rm` |
+| `issue_list` | `issue list` |
+
+Every tool takes `repo`, the absolute path of the repository under review, and runs the command there.
+The server's own working directory is wherever the agent was launched, so it never stands in for `repo`.
+Flags become fields of the same name, with `--old-path` as `old_path`, `--chapter` as `chapter`, and `--hunk` as an object in the schema's spelling, `{ "oldStart": 7, "oldLines": 9, "newStart": 8, "newLines": 14 }`.
+A relative `file` resolves against `repo`.
+The server handles one call at a time, so its own calls can't race each other.
+
 ### write
 
 `chapter-review write [file] [--dry-run]` — validate a **partition draft** (chapters + unassigned + meta, *no* `issues`) and install it. Reads the draft from `file` or stdin.
