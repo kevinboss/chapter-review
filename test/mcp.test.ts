@@ -183,6 +183,30 @@ test("the issue tools record, revise and resolve a finding, hunk given as an obj
   });
 });
 
+test("issue_add records a finding outside the diff, with its line and cause", () => {
+  withWrittenRepo((repo) => {
+    const [add] = tools([
+      [
+        "issue_add",
+        {
+          repo: repo.dir,
+          path: "doc.md",
+          line: 3,
+          cause: { path: "a.txt", hunk: { oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 } },
+          severity: "low",
+          note: "doc still says b1",
+        },
+      ],
+    ]);
+    assert.equal(add.isError, false, add.text);
+    const [issue] = repo.readManifest().issues ?? [];
+    assert.deepEqual(
+      { id: issue.id, line: issue.line, cause: issue.cause },
+      { id: "iss-2.1", line: 3, cause: { path: "a.txt", hunk: { oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 } } }
+    );
+  });
+});
+
 test("issue_update refuses an action outside its list", () => {
   withWrittenRepo((repo) => {
     const [r] = tools([["issue_update", { repo: repo.dir, id: "iss-2.1", action: "add" }]]);

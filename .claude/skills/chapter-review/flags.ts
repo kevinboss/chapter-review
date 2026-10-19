@@ -3,7 +3,7 @@
 // before a change reaches the manifest validator.
 
 import { die } from "./util.ts";
-import type { Confidence, Hunk, IssueStatus, Severity } from "./types.ts";
+import type { Cause, Confidence, Hunk, IssueStatus, Severity } from "./types.ts";
 
 // Partial, because a flag that was not passed is genuinely absent. Typing this
 // as a bare Record would claim every flag is always present, making the
@@ -19,6 +19,8 @@ export interface IssueFields {
   confidence?: Confidence;
   status?: IssueStatus;
   hunk?: Hunk;
+  line?: number;
+  cause?: Cause;
 }
 
 const SEVERITY = new Set<string>(["critical", "high", "low"]);
@@ -32,7 +34,12 @@ const isIssueStatus = (v: string): v is IssueStatus => ISSUE_STATUS.has(v);
 const isConfidence = (v: string): v is Confidence => CONFIDENCE.has(v);
 const CHAPTER_ID = /^ch-[0-9]+$/;
 
-const FLAG_ALIASES: Record<string, string> = { "--old-path": "oldPath", "--chapter": "chapterId" };
+const FLAG_ALIASES: Record<string, string> = {
+  "--old-path": "oldPath",
+  "--chapter": "chapterId",
+  "--cause-path": "causePath",
+  "--cause-hunk": "causeHunk",
+};
 
 /**
  * Parse `--key value` tokens into an object, applying the flag aliases and
@@ -57,7 +64,7 @@ export function parseFlags(argv: string[], allowed: string[]): Flags {
 }
 
 /** Parse a "oldStart,oldLines,newStart,newLines" spec into a Hunk. */
-export function parseHunk(spec: string): Hunk {
+export function parseHunk(spec: string, flag = "--hunk"): Hunk {
   // Strict decimal only. Number() would accept "0x10", "1e3" and "" (as 0), so a
   // typo'd coordinate would become a valid *different* range and file the finding
   // against the wrong hunk instead of erroring.
@@ -68,7 +75,7 @@ export function parseHunk(spec: string): Hunk {
   const parts = raw.map((t) => (/^\d+$/.test(t) ? Number(t) : Number.NaN));
   if (parts.length !== 4 || parts.some((n) => !Number.isSafeInteger(n) || n < 0)) {
     die(
-      `chapter-review: --hunk must be "oldStart,oldLines,newStart,newLines" (got "${spec}")`
+      `chapter-review: ${flag} must be "oldStart,oldLines,newStart,newLines" (got "${spec}")`
     );
   }
   const [oldStart, oldLines, newStart, newLines] = parts;
@@ -109,5 +116,21 @@ export function issueFieldsFromFlags(flags: Flags): IssueFields {
     fields.status = flags.status;
   }
   if (flags.hunk !== undefined) fields.hunk = parseHunk(flags.hunk);
+  if (flags.line !== undefined) {
+    const line = /^\d+$/.test(flags.line) ? Number(flags.line) : Number.NaN;
+    if (!Number.isSafeInteger(line) || line < 1) {
+      die(`chapter-review: --line must be a line number from 1 (got "${flags.line}")`);
+    }
+    fields.line = line;
+  }
+  if (flags.causeHunk !== undefined && flags.causePath === undefined) {
+    die("chapter-review: --cause-hunk needs --cause-path, the file that range belongs to");
+  }
+  if (flags.causePath !== undefined) {
+    fields.cause = {
+      path: flags.causePath,
+      ...(flags.causeHunk === undefined ? {} : { hunk: parseHunk(flags.causeHunk, "--cause-hunk") }),
+    };
+  }
   return fields;
 }

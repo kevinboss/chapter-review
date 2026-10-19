@@ -150,6 +150,36 @@ suite("chapter tree", () => {
       );
     }));
 
+  test("a finding outside the diff sits under its cause's chapter and says so", () =>
+    withFixture(async (fx) => {
+      const outside: Manifest = {
+        ...fx.manifest,
+        issues: [
+          {
+            id: "iss-2.1",
+            path: "doc.md",
+            line: 3,
+            cause: { path: "b.txt" },
+            chapterId: "ch-2",
+            severity: "low",
+            note: "stale doc",
+          },
+        ],
+      };
+      const { provider } = await wire(fx, outside);
+      const children = provider.getChildren(provider.getChildren()[1]);
+      const issue = children.find((n) => n.kind === "issue");
+      assert.ok(issue, `expected a finding among ${kinds(children).join(", ")}`);
+      assert.equal(provider.getTreeItem(issue).description, "low · suspected · outside the diff");
+      const bTxt = children.find((n) => n.kind === "file" && n.entry.path === "b.txt");
+      assert.ok(bTxt);
+      assert.doesNotMatch(
+        String(provider.getTreeItem(bTxt).description ?? ""),
+        /issue/,
+        "the cause's file row counts only findings in that file"
+      );
+    }));
+
   test("a finding no chapter owns sits in the chapter-0 row", () =>
     withFixture(async (fx) => {
       const orphaned: Manifest = {

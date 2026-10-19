@@ -65,7 +65,8 @@ export interface TestRepo {
 
 /**
  * Create a throwaway git repo with a base commit on `main` and a `feat` branch
- * that modifies two files. Returns the paths, resolved refs, and a `cleanup()`
+ * that modifies two files and leaves `doc.md` alone, so findings outside the diff
+ * have a file to sit on. Returns the paths, resolved refs, and a `cleanup()`
  * the caller must run.
  */
 export function makeRepo(): TestRepo {
@@ -79,6 +80,7 @@ export function makeRepo(): TestRepo {
   git("config", "commit.gpgsign", "false");
   writeFileSync(path.join(dir, "a.txt"), "l1\nl2\nl3\nl4\nl5\nl6\n");
   writeFileSync(path.join(dir, "b.txt"), "b1\n");
+  writeFileSync(path.join(dir, "doc.md"), "# Doc\n\nb.txt says b1.\n");
   git("add", "-A");
   git("commit", "-m", "base");
   git("checkout", "-b", "feat");

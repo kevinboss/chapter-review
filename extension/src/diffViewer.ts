@@ -37,6 +37,10 @@ export class DiffViewer {
       return;
     }
     const { issue } = node;
+    if (issue.line !== undefined) {
+      await this.openOutside(issue, issue.line, m);
+      return;
+    }
     const entry = m.chapters
       .find((c) => c.id === issue.chapterId)
       ?.files.find((f) => f.path === issue.path);
@@ -96,6 +100,24 @@ export class DiffViewer {
     const options: vscode.TextDocumentShowOptions =
       line === undefined ? {} : { selection: new vscode.Range(line, 0, line, 0) };
     await vscode.commands.executeCommand("vscode.diff", left, right, title, options);
+  }
+
+  /**
+   * A finding on a file the branch does not change: there is no diff to show, so
+   * the file opens as it stands at the reviewed commit, which is what the line
+   * was read against. "Open File" still reaches the working copy from there.
+   */
+  private async openOutside(issue: Issue, at: number, m: Manifest): Promise<void> {
+    try {
+      const doc = await vscode.workspace.openTextDocument(gitUri(m.headSha ?? m.head, issue.path));
+      const line = Math.max(0, at - 1);
+      await vscode.window.showTextDocument(doc, {
+        preview: true,
+        selection: new vscode.Range(line, 0, line, 0),
+      });
+    } catch {
+      void vscode.window.showWarningMessage(`Chapter Review: could not open ${issue.path}`);
+    }
   }
 
   /**

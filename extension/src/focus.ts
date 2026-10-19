@@ -25,6 +25,8 @@ export interface FocusAnchor {
   path?: string;
   oldPath?: string;
   hunk?: Hunk;
+  /** A line already resolved, as a finding outside the diff carries it. */
+  line?: number;
   chapterId?: string;
   issueId?: string;
 }
@@ -84,6 +86,7 @@ export function focusForNode(node: Node): FocusAnchor | undefined {
         path: node.issue.path,
         oldPath: node.issue.oldPath,
         hunk: node.issue.hunk,
+        line: node.issue.line,
         chapterId: node.issue.chapterId,
         issueId: node.issue.id,
       };
@@ -107,10 +110,11 @@ export async function resolveFocus(
 ): Promise<Focus> {
   const { path, hunk, chapterId, issueId } = anchor;
   const line =
-    hunk === undefined || path === undefined
+    anchor.line ??
+    (hunk === undefined || path === undefined
       ? undefined
       : m === undefined
         ? hunk.newStart
-        : await changeLineFor(repoRoot, m, { path, oldPath: anchor.oldPath }, hunk);
+        : await changeLineFor(repoRoot, m, { path, oldPath: anchor.oldPath }, hunk));
   return { path, line, chapterId, issueId };
 }

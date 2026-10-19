@@ -372,6 +372,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     const resolved = !isOpen(issue);
     const confidence = issue.confidence === "verified" ? "verified" : "suspected";
     const parts: string[] = [issue.severity, confidence];
+    if (issue.line !== undefined) parts.push("outside the diff");
     if (resolved) parts.push("resolved");
     item.description = parts.join(" · ");
     item.tooltip = issueTooltip(issue);

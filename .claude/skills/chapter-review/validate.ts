@@ -164,6 +164,26 @@ function checkIssue(issue: unknown, label: string, push: Push): void {
   checkPath(issue.path, `${label}.path`, push);
   if (issue.oldPath !== undefined) checkPath(issue.oldPath, `${label}.oldPath`, push);
   if (issue.hunk !== undefined) checkHunk(issue.hunk, `${label}.hunk`, push);
+  if (issue.line !== undefined) {
+    if (typeof issue.line !== "number" || !Number.isSafeInteger(issue.line) || issue.line < 1) {
+      push(`${label}.line must be an integer from 1`);
+    }
+    if (issue.hunk !== undefined || issue.oldPath !== undefined) {
+      push(`${label} has a line, so it sits outside the diff and cannot carry a hunk or oldPath`);
+    }
+  }
+  if (issue.cause !== undefined) {
+    if (issue.line === undefined) {
+      push(`${label}.cause applies only to a finding outside the diff, which has a line`);
+    }
+    if (isObject(issue.cause)) {
+      checkPath(issue.cause.path, `${label}.cause.path`, push);
+      if (issue.cause.hunk !== undefined) checkHunk(issue.cause.hunk, `${label}.cause.hunk`, push);
+      noExtraKeys(issue.cause, ["path", "hunk"], `${label}.cause`, push);
+    } else {
+      push(`${label}.cause must be an object`);
+    }
+  }
   if (
     issue.chapterId !== undefined &&
     (typeof issue.chapterId !== "string" || !CHAPTER_ID.test(issue.chapterId))
@@ -198,7 +218,20 @@ function checkIssue(issue: unknown, label: string, push: Push): void {
   }
   noExtraKeys(
     issue,
-    ["id", "path", "oldPath", "hunk", "chapterId", "severity", "note", "confidence", "status", "createdAt"],
+    [
+      "id",
+      "path",
+      "oldPath",
+      "hunk",
+      "line",
+      "cause",
+      "chapterId",
+      "severity",
+      "note",
+      "confidence",
+      "status",
+      "createdAt",
+    ],
     label,
     push
   );
