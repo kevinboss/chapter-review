@@ -17,26 +17,46 @@ export class DiffViewer {
   constructor(
     private readonly folderUri: vscode.Uri,
     private readonly patchedDocs: PatchedContentProvider,
-    private readonly getManifest: () => Manifest | undefined
+    private readonly roundManifest: (round: number) => Manifest | undefined
   ) {}
 
-  /** Diff for a file or hunk node. */
+  /** Diff for a file or hunk node, from its round's start to that round's head. */
   openDiff(node: FileNode | HunkNode): Promise<void> {
+    const m = this.roundManifest(node.round);
+    if (!m) {
+      return Promise.resolve();
+    }
     const focusHunk = node.kind === "hunk" ? node.hunk : undefined;
-    return this.openEntry(node.ownerId, node.entry, focusHunk);
+    return this.openEntry(m, node.ownerId, node.entry, focusHunk);
   }
 
   /**
-   * Opens the diff for an issue's owning chapter entry, positioned on the
-   * issue's hunk. Falls back to the plain working file for an orphaned issue
-   * whose chapter/entry no longer exists.
+   * The whole branch's change to a file of a later round, merge base to that
+   * round's head, for the context a round's own diff leaves out.
    */
-  async openIssue(node: IssueNode): Promise<void> {
-    const m = this.getManifest();
+  async openBranchDiff(node: FileNode): Promise<void> {
+    const m = this.roundManifest(node.round);
     if (!m) {
       return;
     }
+    const { entry } = node;
+    const left = gitUri(m.mergeBase, entry.oldPath ?? entry.path);
+    const right = entry.status === "deleted" ? gitUri("", entry.path) : gitUri(m.headSha, entry.path);
+    const title = `${path.posix.basename(entry.path)} (whole branch)`;
+    await vscode.commands.executeCommand("vscode.diff", left, right, title);
+  }
+
+  /**
+   * Opens the diff for an issue's owning chapter entry in the issue's round,
+   * positioned on the issue's line or hunk. Falls back to the plain working file
+   * for an orphaned issue whose chapter/entry no longer exists.
+   */
+  async openIssue(node: IssueNode): Promise<void> {
     const { issue } = node;
+    const m = this.roundManifest(issue.round);
+    if (!m) {
+      return;
+    }
     if (issue.line !== undefined && isOutsideDiff(m, issue)) {
       await this.openOutside(issue, issue.line, m);
       return;
@@ -45,46 +65,44 @@ export class DiffViewer {
       .find((c) => c.id === issue.chapterId)
       ?.files.find((f) => f.path === issue.path);
     if (entry && issue.chapterId !== undefined) {
-      await this.openEntry(issue.chapterId, entry, focusHunkFor(issue, entry), issue.line);
+      await this.openEntry(m, issue.chapterId, entry, focusHunkFor(issue, entry), issue.line);
     } else {
       await this.openWorkingFile(issue, m);
     }
   }
 
   /**
-   * Diff of an entry: merge base on the left, the head file (or a chapter-scoped
-   * patch) on the right, with the cursor on `focusLine` (a line of the head file)
-   * when the right side holds it, and on the focused hunk's change otherwise.
+   * Diff of an entry: the round's start on the left, the head file (or a
+   * chapter-scoped patch) on the right, with the cursor on `focusLine` (a line of
+   * the head file) when the right side holds it, and on the focused hunk's change
+   * otherwise.
    */
   private async openEntry(
+    m: Manifest,
     ownerId: string,
     entry: Entry,
     focusHunk?: Hunk,
     focusLine?: number
   ): Promise<void> {
-    const m = this.getManifest();
-    if (!m) {
-      return;
-    }
-    const headRef = m.headSha ?? m.head;
+    const headRef = m.headSha;
     const oldName = entry.oldPath ?? entry.path;
     const title = `${path.posix.basename(entry.path)} (${ownerTitle(m, ownerId)})`;
 
     const left =
-      entry.status === "added" ? gitUri("", entry.path) : gitUri(m.mergeBase, oldName);
+      entry.status === "added" ? gitUri("", entry.path) : gitUri(m.fromSha, oldName);
     const { right, line } = await (async (): Promise<{
       right: vscode.Uri;
       line: number | undefined;
     }> => {
       if (entry.hunks && entry.status !== "added" && entry.status !== "deleted") {
-        // Chapter-scoped view: right side is merge-base content with only this
-        // entry's hunks applied, so the diff shows nothing but this chapter.
+        // Chapter-scoped view: right side is the round's starting content with
+        // only this entry's hunks applied, so the diff shows nothing but this chapter.
         const [oldText, newText] = await Promise.all([
-          gitShow(this.folderUri.fsPath, m.mergeBase, oldName),
+          gitShow(this.folderUri.fsPath, m.fromSha, oldName),
           gitShow(this.folderUri.fsPath, headRef, entry.path),
         ]);
         const patch = applyHunks(oldText, newText, entry.hunks);
-        const scoped = patchedUri(ownerId, entry.path);
+        const scoped = patchedUri(`${String(m.round)}-${ownerId}`, entry.path);
         this.patchedDocs.set(scoped, patch.text);
 
         // A hunk from outside this entry misses the map. No line at all then:
@@ -125,7 +143,7 @@ export class DiffViewer {
    */
   private async openOutside(issue: Issue, at: number, m: Manifest): Promise<void> {
     try {
-      const doc = await vscode.workspace.openTextDocument(gitUri(m.headSha ?? m.head, issue.path));
+      const doc = await vscode.workspace.openTextDocument(gitUri(m.headSha, issue.path));
       const line = Math.max(0, at - 1);
       await vscode.window.showTextDocument(doc, {
         preview: true,

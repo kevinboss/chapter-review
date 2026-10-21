@@ -71,9 +71,9 @@ function isReviewedUnits(v: unknown): v is ReviewedUnit[] {
   return Array.isArray(v) && v.every((u: unknown) => hasPath(u));
 }
 
-/** The checkmark rows on disk, however the extension last left them. */
-function readProgressFromDisk(fx: Fixture): ReviewedUnit[] {
-  const doc: unknown = JSON.parse(readFileSync(progressPath(fx), "utf8"));
+/** The checkmark rows in a progress document, however the extension last left them. */
+function readProgress(p: string): ReviewedUnit[] {
+  const doc: unknown = JSON.parse(readFileSync(p, "utf8"));
   if (typeof doc !== "object" || doc === null || !("reviewed" in doc)) {
     throw new Error("progress.json has no reviewed array");
   }
@@ -96,8 +96,8 @@ async function providerFor(
   manifest: Manifest,
   progress = new ReviewProgress()
 ): Promise<ChapterTreeProvider> {
-  const p = new ChapterTreeProvider(vscode.Uri.file(fx.dir), progress, manifest, "tree");
-  p.digests = await computeDigests(fx.dir, manifest);
+  const p = new ChapterTreeProvider(vscode.Uri.file(fx.dir), "tree");
+  p.rounds = [{ manifest, progress, digests: await computeDigests(fx.dir, manifest) }];
   return p;
 }
 
@@ -155,7 +155,7 @@ suite("CLI and extension over the same files", () => {
       assert.match(unchecked, /Unchecked b\.txt \(1 unit\)/, "the CLI must find the extension's row");
     }));
 
-  test("a regeneration keeps the untouched file ticked and re-opens the changed one", () =>
+  test("a new round keeps round 1's checkmarks in round 1 and starts unticked", () =>
     withFixture(async (fx) => {
       await cli(fx, ["write"], draft(fx));
       const first = readManifestFromDisk(fx);
@@ -163,35 +163,37 @@ suite("CLI and extension over the same files", () => {
 
       const digests = await computeDigests(fx.dir, first);
       const aKey = reviewKey("a.txt", first.chapters[0].files[0].hunks?.[0]);
+      const bKey = reviewKey("b.txt");
       progress.setReviewed(
         [
           { key: aKey, digest: digests.get(aKey)?.unit },
-          { key: reviewKey("b.txt"), digest: digests.get(reviewKey("b.txt"))?.unit },
+          { key: bKey, digest: digests.get(bKey)?.unit },
         ],
         true
       );
       persistProgress(fx, progress, first);
 
-      // b.txt changes; a.txt does not.
       writeFileSync(path.join(fx.dir, "b.txt"), "B1 revised\n");
       fx.git("commit", "-am", "revise b");
-      const summary = await cli(fx, ["write"], draft(fx, { headSha: fx.git("rev-parse", "HEAD").trim() }));
-      assert.match(summary, /2 checkmarks carried/, "the CLI carries both rows by path");
-
-      // The extension is what decides whether a carried row still counts.
-      const reloaded = new ReviewProgress();
-      reloaded.load(readProgressFromDisk(fx));
-      const afterDigests = await computeDigests(fx.dir, readManifestFromDisk(fx));
-
-      assert.ok(
-        reloaded.isReviewedAt(aKey, afterDigests.get(aKey)?.unit),
-        "a.txt was untouched, so it stays reviewed"
+      const summary = await cli(
+        fx,
+        ["write"],
+        draft(fx, { chapters: [{ id: "ch-2", title: "revise b", files: [{ path: "b.txt", status: "modified" }] }] })
       );
-      assert.equal(
-        reloaded.isReviewedAt(reviewKey("b.txt"), afterDigests.get(reviewKey("b.txt"))?.unit),
-        false,
-        "b.txt changed, so its carried row must not count"
-      );
+      assert.match(summary, /round 2: what changed since round 1/);
+
+      // Round 1 is read back as the extension reads it, and still reads as ticked:
+      // its commits did not move, only the branch did.
+      const round1 = parseManifest(readFileSync(path.join(fx.gitDir, "chapter-review", "rounds", "1", "chapters.json"), "utf8"));
+      const kept = new ReviewProgress();
+      kept.load(readProgress(path.join(fx.gitDir, "chapter-review", "rounds", "1", "progress.json")));
+      const round1Digests = await computeDigests(fx.dir, round1);
+      assert.ok(kept.isReviewedAt(aKey, round1Digests.get(aKey)?.unit));
+      assert.ok(kept.isReviewedAt(bKey, round1Digests.get(bKey)?.unit));
+
+      const round2 = readManifestFromDisk(fx);
+      assert.equal(round2.round, 2);
+      assert.ok(!existsSync(progressPath(fx)), "round 2 starts with nothing ticked");
     }));
 
   test("a rename carries the finding, and the extension renders the new path", () =>
@@ -200,28 +202,14 @@ suite("CLI and extension over the same files", () => {
       await cli(fx, ["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "follow me"]);
 
       fx.git("mv", "b.txt", "c.txt");
-      writeFileSync(path.join(fx.dir, "c.txt"), "b1\n");
       fx.git("commit", "-am", "rename b to c");
 
       const out = await cli(
         fx,
         ["write"],
         draft(fx, {
-          headSha: fx.git("rev-parse", "HEAD").trim(),
           chapters: [
-            fx.manifest.chapters[0],
-            {
-              id: "ch-2",
-              title: "edit a bottom and rename b",
-              files: [
-                {
-                  path: "a.txt",
-                  status: "modified",
-                  hunks: [{ oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 }],
-                },
-                { path: "c.txt", status: "renamed", oldPath: "b.txt" },
-              ],
-            },
+            { id: "ch-2", title: "rename b", files: [{ path: "c.txt", status: "renamed", oldPath: "b.txt" }] },
           ],
         })
       );
@@ -230,7 +218,7 @@ suite("CLI and extension over the same files", () => {
       const onDisk = readManifestFromDisk(fx);
       assert.equal(onDisk.issues?.[0].path, "c.txt");
       const provider = await providerFor(fx, onDisk);
-      const files = provider.getChildren(provider.getChildren()[1]);
+      const files = provider.getChildren(provider.getChildren()[0]);
       assert.ok(
         files.some((n) => n.kind === "file" && n.entry.path === "c.txt"),
         "the tree should show the file under its new name"
@@ -250,7 +238,11 @@ suite("CLI and extension over the same files", () => {
         "the manifest's pin is behind the branch"
       );
 
-      await cli(fx, ["write"], draft(fx, { headSha: fx.git("rev-parse", "HEAD").trim() }));
+      await cli(
+        fx,
+        ["write"],
+        draft(fx, { chapters: [{ id: "ch-2", title: "move head", files: [{ path: "b.txt", status: "modified" }] }] })
+      );
       assert.equal(
         (await checkStaleness(fx.dir, readManifestFromDisk(fx))).stale,
         false,

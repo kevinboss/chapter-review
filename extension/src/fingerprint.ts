@@ -25,7 +25,7 @@ export type DigestMap = Map<string, UnitDigest>;
  * gets a new digest and reads as unreviewed; a unit that only shifted position
  * (identical content, new line numbers) keeps its digest and stays reviewed.
  *
- * Digests are a pure function of the manifest's pinned blobs (mergeBase and
+ * Digests are a pure function of the manifest's pinned blobs (fromSha and
  * headSha), so they only need recomputing when the manifest itself changes, not
  * when the branch moves underneath a stale manifest.
  *
@@ -35,7 +35,8 @@ export type DigestMap = Map<string, UnitDigest>;
  * survive the partition re-cutting that file into hunks (see ReviewProgress).
  */
 export async function computeDigests(repoRoot: string, manifest: Manifest): Promise<DigestMap> {
-  const headRef = manifest.headSha ?? manifest.head;
+  const headRef = manifest.headSha;
+  const fromRef = manifest.fromSha;
   const entries = allEntries(manifest);
 
   // Fetch each (ref, path) blob once, in parallel; a hunk-split file appears
@@ -48,7 +49,7 @@ export async function computeDigests(repoRoot: string, manifest: Manifest): Prom
     }
   };
   for (const e of entries) {
-    need(manifest.mergeBase, e.oldPath ?? e.path);
+    need(fromRef, e.oldPath ?? e.path);
     need(headRef, e.path);
   }
   const text = new Map<string, string>();
@@ -61,7 +62,7 @@ export async function computeDigests(repoRoot: string, manifest: Manifest): Prom
 
   const digests: DigestMap = new Map();
   for (const e of entries) {
-    const oldText = get(manifest.mergeBase, e.oldPath ?? e.path);
+    const oldText = get(fromRef, e.oldPath ?? e.path);
     const newText = get(headRef, e.path);
     const file = sha(`${oldText}\0${newText}`);
     const wholeKey = reviewKey(e.path);

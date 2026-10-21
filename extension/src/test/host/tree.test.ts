@@ -42,8 +42,8 @@ interface Wired {
 /** A provider wired to a fresh fixture, with digests computed. */
 async function wire(fx: Fixture, manifest: Manifest = fx.manifest): Promise<Wired> {
   const progress = new ReviewProgress();
-  const provider = new ChapterTreeProvider(vscode.Uri.file(fx.dir), progress, manifest, "tree");
-  provider.digests = await computeDigests(fx.dir, manifest);
+  const provider = new ChapterTreeProvider(vscode.Uri.file(fx.dir), "tree");
+  provider.rounds = [{ manifest, progress, digests: await computeDigests(fx.dir, manifest) }];
   return { provider, progress };
 }
 
@@ -136,8 +136,8 @@ suite("chapter tree", () => {
         issues: [
           // Out of order on purpose: the rows sort by number, not by array order,
           // because a re-homed finding keeps its place but takes a new number.
-          { id: "iss-2.2", path: "b.txt", chapterId: "ch-2", severity: "low", note: "second" },
-          { id: "iss-2.1", path: "b.txt", chapterId: "ch-2", severity: "high", note: "no guard" },
+          { id: "iss-2.2", round: 1, path: "b.txt", chapterId: "ch-2", severity: "low", note: "second" },
+          { id: "iss-2.1", round: 1, path: "b.txt", chapterId: "ch-2", severity: "high", note: "no guard" },
         ],
       };
       const { provider } = await wire(fx, withIssue);
@@ -157,6 +157,7 @@ suite("chapter tree", () => {
         issues: [
           {
             id: "iss-2.1",
+            round: 1,
             path: "doc.md",
             line: 3,
             cause: { path: "b.txt" },
@@ -185,7 +186,7 @@ suite("chapter tree", () => {
       const orphaned: Manifest = {
         ...fx.manifest,
         // No chapterId: the path is quarantined, or its chapter is gone.
-        issues: [{ id: "iss-0.1", path: "b.txt", severity: "low", note: "on noise" }],
+        issues: [{ id: "iss-0.1", round: 1, path: "b.txt", severity: "low", note: "on noise" }],
       };
       const { provider } = await wire(fx, orphaned);
       const root = provider.getChildren().find((n) => n.kind === "issuesRoot");

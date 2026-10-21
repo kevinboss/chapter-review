@@ -70,8 +70,9 @@ suite("focusForNode", () => {
   const hunk = { oldStart: 5, oldLines: 1, newStart: 7, newLines: 1 };
 
   test("a file anchors to its first hunk", () => {
-    const node: Node = { kind: "file", ownerId: "ch-1", entry: { ...entry, hunks: [hunk] } };
+    const node: Node = { kind: "file", round: 1, ownerId: "ch-1", entry: { ...entry, hunks: [hunk] } };
     assert.deepEqual(focusForNode(node), {
+      round: 1,
       path: "a.txt",
       oldPath: undefined,
       hunk,
@@ -80,26 +81,27 @@ suite("focusForNode", () => {
   });
 
   test("a whole-file claim carries no hunk", () => {
-    const node: Node = { kind: "file", ownerId: "ch-1", entry };
+    const node: Node = { kind: "file", round: 1, ownerId: "ch-1", entry };
     assert.equal(focusForNode(node)?.hunk, undefined);
   });
 
   test("a quarantined file reports no chapter", () => {
-    const node: Node = { kind: "file", ownerId: "unassigned", entry };
+    const node: Node = { kind: "file", round: 1, ownerId: "unassigned", entry };
     assert.equal(focusForNode(node)?.chapterId, undefined);
   });
 
   test("a hunk anchors to itself", () => {
-    const node: Node = { kind: "hunk", ownerId: "ch-2", entry, hunk, index: 0 };
+    const node: Node = { kind: "hunk", round: 1, ownerId: "ch-2", entry, hunk, index: 0 };
     assert.equal(focusForNode(node)?.hunk, hunk);
   });
 
   test("an issue carries its id, so the skill can look the finding up", () => {
     const node: Node = {
       kind: "issue",
-      issue: { id: "iss-2.3", path: "b.txt", chapterId: "ch-2", severity: "low", note: "x", hunk },
+      issue: { id: "iss-2.3", round: 1, path: "b.txt", chapterId: "ch-2", severity: "low", note: "x", hunk },
     };
     assert.deepEqual(focusForNode(node), {
+      round: 1,
       path: "b.txt",
       oldPath: undefined,
       hunk,
@@ -114,6 +116,7 @@ suite("focusForNode", () => {
       kind: "issue",
       issue: {
         id: "iss-2.4",
+        round: 1,
         path: "doc.md",
         line: 89,
         cause: { path: "b.txt" },
@@ -129,6 +132,7 @@ suite("focusForNode", () => {
   test("a renamed entry carries the pre-rename path, so the before side resolves", () => {
     const node: Node = {
       kind: "file",
+      round: 1,
       ownerId: "ch-1",
       entry: { path: "c.txt", oldPath: "b.txt", status: "renamed", hunks: [hunk] },
     };
@@ -138,9 +142,10 @@ suite("focusForNode", () => {
   test("a chapter carries only its id", () => {
     const node: Node = {
       kind: "chapter",
+      round: 1,
       chapter: { id: "ch-1", title: "t", files: [entry] },
     };
-    assert.deepEqual(focusForNode(node), { chapterId: "ch-1" });
+    assert.deepEqual(focusForNode(node), { round: 1, chapterId: "ch-1" });
   });
 
   test("a node with nothing to point at yields no focus", () => {
@@ -170,12 +175,13 @@ suite("resolveFocus", () => {
   test("a line already resolved is written as it is", () =>
     withFixture(async (fx) => {
       const focus = await resolveFocus(fx.dir, fx.manifest, {
+        round: 1,
         path: "doc.md",
         line: 89,
         chapterId: "ch-1",
         issueId: "iss-1.1",
       });
-      assert.deepEqual(focus, { path: "doc.md", line: 89, chapterId: "ch-1", issueId: "iss-1.1" });
+      assert.deepEqual(focus, { round: 1, path: "doc.md", line: 89, chapterId: "ch-1", issueId: "iss-1.1" });
     }));
 
   test("a hunk with no leading context keeps its own start", () =>
@@ -191,12 +197,14 @@ suite("resolveFocus", () => {
   test("drops the hunk from what it writes, and keeps the ids", () =>
     withFixture(async (fx) => {
       const focus = await resolveFocus(fx.dir, fx.manifest, {
+        round: 1,
         path: "a.txt",
         hunk: { oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 },
         chapterId: "ch-2",
         issueId: "iss-2.1",
       });
       assert.deepEqual(focus, {
+        round: 1,
         path: "a.txt",
         line: 5,
         chapterId: "ch-2",

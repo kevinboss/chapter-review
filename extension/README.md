@@ -50,13 +50,13 @@ If the view says "No chapter manifest found", the skill hasn't generated one for
 - Issues carry the same checkbox: ticking one marks it resolved (written back to the manifest for the skill to read), so completing a finding works like completing a file.
 - Clicking a finding opens its chapter's diff on the line the finding is about, or on its range's first change when it names no line.
 - A finding on a file the branch left wrong without changing it (a stale doc, a forgotten caller) sits under the chapter of the change that caused it and reads "outside the diff". Clicking it opens that file as it stands at the reviewed commit, on the finding's line.
+- Review rounds: when the author pushes fixes and the skill runs again, the new round holds only what changed since the last one, in a drawer of its own above the earlier rounds, which stay as you left them with their checkmarks. A round's diff runs from the previous round's head, replayed onto the new base when the author rebased, so you read the fixups and not the whole branch again; a file row offers the whole branch's diff next to it. Open findings on files the fixups touched come along into the new round.
 - Auto-refreshes when the skill regenerates the manifest.
 - Staleness detection: the view flags when the branch has moved past the commit the chapters were generated against, so you know to regenerate the manifest.
 
 ## Known limitations
 
 - Staleness is detected at the branch level (the recorded head moved). It does not yet recompute which individual hunks changed, so a stale manifest is flagged rather than partially updated.
-- A manifest generated without a pinned head commit falls back to the branch ref, which can drift.
 - Multi-root workspaces: only the first folder is considered.
 
 ## License

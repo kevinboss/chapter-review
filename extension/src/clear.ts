@@ -1,5 +1,5 @@
 // Discarding a review. The whole protocol directory goes, not just the manifest,
-// because either leftover is worse than both states. `chapters.json.bak` is
+// earlier rounds included, because either leftover is worse than both states. `chapters.json.bak` is
 // where the next generation carries findings back from (the CLI reads it
 // whenever the manifest is missing), so a review cleared with its backup intact
 // returns in full on the next write. And `progress.json` outlives the manifest
@@ -35,7 +35,8 @@ export function clearDetail(manifest: Manifest | undefined): string {
     counts.push(plural(open, "open finding"));
   }
   const last = counts.pop();
-  return `${manifest.head}: ${counts.join(", ")} and ${last}. ${tail}`;
+  const rounds = manifest.round > 1 ? ` (round ${String(manifest.round)}, earlier rounds included)` : "";
+  return `${manifest.head}${rounds}: ${counts.join(", ")} and ${last}. ${tail}`;
 }
 
 /** Is there review state in this repository at all? */

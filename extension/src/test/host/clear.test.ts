@@ -25,6 +25,7 @@ function writeCompanions(fx: Fixture): void {
 
 const issue = (over: Partial<Issue> = {}): Issue => ({
   id: "iss-1.1",
+  round: 1,
   path: "a.txt",
   chapterId: "ch-1",
   severity: "high",

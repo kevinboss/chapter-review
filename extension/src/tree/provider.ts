@@ -20,7 +20,7 @@ import {
 import { ReviewUnit } from "../progress";
 import { Staleness } from "../staleness";
 import { buildFolderTree } from "./folderTree";
-import { FileNode, folderFileKeys, HunkNode, IssueNode, Node, ProgressReader, ViewMode } from "./nodes";
+import { FileNode, folderFileKeys, HunkNode, IssueNode, Node, RoundView, ViewMode } from "./nodes";
 
 const STATUS_LETTER: Record<string, string> = {
   added: "A",
@@ -36,15 +36,22 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   /** Set by the host when the manifest's pinned commit diverges from the branch. */
   staleness: Staleness | undefined;
 
-  /** Current content digest per review key; set by the host on each manifest reload. */
-  digests: DigestMap = new Map();
+  /** Every round of the review, oldest first; the last one is the current round. */
+  rounds: RoundView[] = [];
 
   constructor(
     private readonly workspaceRoot: vscode.Uri,
-    private readonly progress: ProgressReader,
-    public manifest: Manifest | undefined,
     public viewMode: ViewMode
   ) {}
+
+  /** The current round's manifest, which also holds every round's findings. */
+  get manifest(): Manifest | undefined {
+    return this.rounds.at(-1)?.manifest;
+  }
+
+  roundView(round: number): RoundView | undefined {
+    return this.rounds.find((r) => r.manifest.round === round);
+  }
 
   refresh(): void {
     this.changed.fire();
@@ -65,7 +72,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       case "chapter":
         return node.chapter.files.flatMap(entryKeys);
       case "unassignedRoot":
-        return (this.manifest?.unassigned ?? []).flatMap(entryKeys);
+        return (this.roundView(node.round)?.manifest.unassigned ?? []).flatMap(entryKeys);
       case "folder":
         return folderFileKeys(node);
       default:
@@ -73,45 +80,54 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     }
   }
 
+  /** The round a node's checkmarks belong to; undefined for a node holding none. */
+  roundOf(node: Node): number | undefined {
+    return "round" in node ? node.round : undefined;
+  }
+
   /** Each review key a node covers, paired with its unit's current digest. */
   reviewUnitsFor(node: Node): ReviewUnit[] {
-    return this.reviewKeysFor(node).map((key) => ({ key, digest: this.digests.get(key)?.unit }));
+    const digests = this.digestsOf(this.roundOf(node));
+    return this.reviewKeysFor(node).map((key) => ({ key, digest: digests.get(key)?.unit }));
+  }
+
+  private digestsOf(round: number | undefined): DigestMap {
+    const none: DigestMap = new Map();
+    return (round === undefined ? undefined : this.roundView(round)?.digests) ?? none;
   }
 
   /**
-   * Whether one review unit reads as reviewed. An exact-match test: a mark
-   * recorded at another granularity is reconciled by adoptWholeFileMarks.
+   * Whether one review unit of a round reads as reviewed. An exact-match test: a
+   * mark recorded at another granularity is reconciled by adoptWholeFileMarks.
    */
-  private isReviewed(key: string): boolean {
-    return this.progress.isReviewedAt(key, this.digests.get(key)?.unit);
+  private isReviewed(round: number, key: string): boolean {
+    const view = this.roundView(round);
+    return view?.progress.isReviewedAt(key, view.digests.get(key)?.unit) === true;
   }
 
   /** Checkbox state for a node backed by review keys, or none if it has zero. */
   private checkbox(node: Node): vscode.TreeItemCheckboxState | undefined {
     const keys = this.reviewKeysFor(node);
-    if (keys.length === 0) {
+    const round = this.roundOf(node);
+    if (keys.length === 0 || round === undefined) {
       return undefined;
     }
-    return keys.every((k) => this.isReviewed(k))
+    return keys.every((k) => this.isReviewed(round, k))
       ? vscode.TreeItemCheckboxState.Checked
       : vscode.TreeItemCheckboxState.Unchecked;
   }
 
   getChildren(node?: Node): Node[] {
-    if (!this.manifest) {
+    const current = this.manifest;
+    if (!current) {
       return [];
     }
     if (!node) {
-      const roots: Node[] = this.manifest.chapters.map((chapter) => ({
-        kind: "chapter",
-        chapter,
-      }));
-      if (this.manifest.unassigned.length > 0) {
-        roots.push({ kind: "unassignedRoot" });
-      }
-      if (this.orphanIssues().length > 0) {
-        roots.push({ kind: "issuesRoot" });
-      }
+      // One round needs no drawer: the tree reads as it always has.
+      const roots: Node[] =
+        this.rounds.length > 1
+          ? [...this.rounds].reverse().map((r): Node => ({ kind: "round", round: r.manifest.round }))
+          : this.roundChildren(current);
       // Dirty second so it sits below the staler warning when both apply.
       if (this.staleness?.dirty) {
         roots.unshift({ kind: "dirtyWarning" });
@@ -122,17 +138,25 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       return roots;
     }
     switch (node.kind) {
+      case "round": {
+        const view = this.roundView(node.round);
+        return view ? this.roundChildren(view.manifest) : [];
+      }
       case "chapter":
         return [
-          ...this.fileChildren(node.chapter.id, node.chapter.files),
-          ...this.issuesForChapter(node.chapter.id).map(
+          ...this.fileChildren(node.round, node.chapter.id, node.chapter.files),
+          ...this.issuesForChapter(node.round, node.chapter.id).map(
             (issue): IssueNode => ({ kind: "issue", issue })
           ),
         ];
       case "unassignedRoot":
-        return this.fileChildren("unassigned", this.manifest.unassigned);
+        return this.fileChildren(
+          node.round,
+          "unassigned",
+          this.roundView(node.round)?.manifest.unassigned ?? []
+        );
       case "issuesRoot":
-        return this.orphanIssues().map((issue): IssueNode => ({ kind: "issue", issue }));
+        return this.orphanIssues(node.round).map((issue): IssueNode => ({ kind: "issue", issue }));
       case "folder":
         return node.children;
       case "file": {
@@ -142,6 +166,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
         }
         return hunks.map((hunk, index) => ({
           kind: "hunk",
+          round: node.round,
           ownerId: node.ownerId,
           entry: node.entry,
           hunk,
@@ -156,51 +181,67 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     }
   }
 
+  /** A round's chapters, then its quarantined files and its findings no chapter owns. */
+  private roundChildren(m: Manifest): Node[] {
+    const nodes: Node[] = m.chapters.map((chapter) => ({ kind: "chapter", round: m.round, chapter }));
+    if (m.unassigned.length > 0) {
+      nodes.push({ kind: "unassignedRoot", round: m.round });
+    }
+    if (this.orphanIssues(m.round).length > 0) {
+      nodes.push({ kind: "issuesRoot", round: m.round });
+    }
+    return nodes;
+  }
+
   private allIssues(): Issue[] {
     return this.manifest?.issues ?? [];
   }
 
-  private issuesForChapter(chapterId: string): Issue[] {
+  private issuesForChapter(round: number, chapterId: string): Issue[] {
     return this.allIssues()
-      .filter((i) => i.chapterId === chapterId)
+      .filter((i) => i.round === round && i.chapterId === chapterId)
       .sort(byIssueNumber);
   }
 
-  private issuesForFile(chapterId: string, filePath: string): Issue[] {
+  private issuesForFile(round: number, chapterId: string, filePath: string): Issue[] {
     return this.allIssues().filter(
-      (i) => i.chapterId === chapterId && i.path === filePath
+      (i) => i.round === round && i.chapterId === chapterId && i.path === filePath
     );
   }
 
-  /** Issues whose chapterId is unset or no longer names a chapter. */
-  private orphanIssues(): Issue[] {
-    const ids = new Set(this.manifest?.chapters.map((c) => c.id));
+  /** A round's issues whose chapterId is unset or names no chapter of that round. */
+  private orphanIssues(round: number): Issue[] {
+    const ids = new Set(this.roundView(round)?.manifest.chapters.map((c) => c.id));
     return this.allIssues()
-      .filter((i) => !i.chapterId || !ids.has(i.chapterId))
+      .filter((i) => i.round === round && (!i.chapterId || !ids.has(i.chapterId)))
       .sort(byIssueNumber);
   }
 
   private fileChildren(
+    round: number,
     ownerId: string,
     entries: (FileEntry | UnassignedEntry)[]
   ): Node[] {
     const files: FileNode[] = entries.map((entry) => ({
       kind: "file",
+      round,
       ownerId,
       entry,
     }));
     if (this.viewMode === "list") {
       return files;
     }
-    return buildFolderTree(ownerId, files);
+    return buildFolderTree(round, ownerId, files);
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
     switch (node.kind) {
+      case "round":
+        return this.roundItem(node.round);
       case "chapter":
-        return this.chapterItem(node.chapter);
+        return this.chapterItem(node.round, node.chapter);
       case "unassignedRoot":
-        return this.unassignedRootItem();
+        return this.unassignedRootItem(node.round);
       case "folder": {
         const item = new vscode.TreeItem(
           node.label,
@@ -217,7 +258,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       case "issue":
         return this.issueItem(node);
       case "issuesRoot":
-        return this.issuesRootItem();
+        return this.issuesRootItem(node.round);
       case "staleWarning":
         return this.staleWarningItem();
       case "dirtyWarning":
@@ -256,7 +297,42 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     return item;
   }
 
-  private chapterItem(chapter: Chapter): vscode.TreeItem {
+  /**
+   * A round's drawer. The current round opens expanded and earlier ones closed;
+   * the id says which it is, so a round that stops being current comes back
+   * closed rather than as it was last left.
+   */
+  private roundItem(round: number): vscode.TreeItem {
+    const m = this.roundView(round)?.manifest;
+    const current = round === this.manifest?.round;
+    const item = new vscode.TreeItem(
+      `Round ${String(round)}`,
+      current ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed
+    );
+    item.id = `round:${String(round)}:${current ? "current" : "earlier"}`;
+    if (!m) {
+      return item;
+    }
+    const { done, total } = this.countUnits(round, allEntries(m));
+    const day = new Date(m.generatedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    item.description = `${day} · ${short(m.fromSha)} → ${short(m.headSha)} · ${done}/${total}`;
+    item.iconPath = new vscode.ThemeIcon(current ? "git-commit" : "history");
+    item.tooltip = textTooltip(
+      round === 1
+        ? "The whole branch as first reviewed, from the merge base to its head then."
+        : `What changed since round ${String(round - 1)}: from that round's head` +
+            (m.fromSha === this.roundView(round - 1)?.manifest.headSha
+              ? ""
+              : ", replayed onto the base the branch moved to,") +
+            ` to ${short(m.headSha)}.` +
+            (m.replayConflicts?.length
+              ? ` These files did not replay cleanly, so their diff also shows the base's changes: ${m.replayConflicts.join(", ")}.`
+              : "")
+    );
+    return item;
+  }
+
+  private chapterItem(round: number, chapter: Chapter): vscode.TreeItem {
     // Numbered on the row so the reviewer can say "chapter 2" to the agent and
     // mean the same chapter the agent calls ch-2. Findings carry the number too,
     // which is how a chapter and its findings read as one sequence.
@@ -265,31 +341,31 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       number === undefined ? chapter.title : `${number} · ${chapter.title}`,
       vscode.TreeItemCollapsibleState.Collapsed
     );
-    item.id = `chapter:${chapter.id}`;
-    const { done, total } = this.countUnits(chapter.files);
-    const open = this.issuesForChapter(chapter.id).filter(isOpen).length;
+    item.id = `r${String(round)}/chapter:${chapter.id}`;
+    const { done, total } = this.countUnits(round, chapter.files);
+    const open = this.issuesForChapter(round, chapter.id).filter(isOpen).length;
     item.description =
       open > 0 ? `${done}/${total} · ${open} issue${open > 1 ? "s" : ""}` : `${done}/${total}`;
     item.iconPath = new vscode.ThemeIcon(
       open > 0 ? "warning" : done === total ? "pass-filled" : "book"
     );
-    item.checkboxState = this.checkbox({ kind: "chapter", chapter });
+    item.checkboxState = this.checkbox({ kind: "chapter", round, chapter });
     // The full id leads the tooltip: the row shows the bare number, and this is
     // where the spelling the CLI takes (`--chapter ch-2`) is available.
     item.tooltip = chapterTooltip(chapter.id, chapter.description);
     return item;
   }
 
-  private unassignedRootItem(): vscode.TreeItem {
+  private unassignedRootItem(round: number): vscode.TreeItem {
     const item = new vscode.TreeItem(
       "Unassigned",
       vscode.TreeItemCollapsibleState.Collapsed
     );
-    item.id = "unassignedRoot";
-    const { done, total } = this.countUnits(this.manifest?.unassigned ?? []);
+    item.id = `r${String(round)}/unassignedRoot`;
+    const { done, total } = this.countUnits(round, this.roundView(round)?.manifest.unassigned ?? []);
     item.description = `${done}/${total}`;
     item.iconPath = new vscode.ThemeIcon("archive");
-    item.checkboxState = this.checkbox({ kind: "unassignedRoot" });
+    item.checkboxState = this.checkbox({ kind: "unassignedRoot", round });
     item.tooltip = textTooltip(
       "Noise quarantined by the skill (lockfiles, generated code, autoformat)"
     );
@@ -304,8 +380,13 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
         ? vscode.TreeItemCollapsibleState.Collapsed
         : vscode.TreeItemCollapsibleState.None
     );
-    item.id = `${node.ownerId}:${entry.path}`;
+    item.id = `r${String(node.round)}/${node.ownerId}:${entry.path}`;
     item.resourceUri = vscode.Uri.joinPath(this.workspaceRoot, entry.path);
+    // A later round's diff is only what changed since the round before; the menu
+    // offers the whole branch's change to the file next to it.
+    if (node.round > 1) {
+      item.contextValue = "laterRoundFile";
+    }
 
     const parts: string[] = [];
     if (this.viewMode === "list") {
@@ -320,10 +401,13 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     }
     const openIssues =
       node.ownerId !== "unassigned"
-        ? this.issuesForFile(node.ownerId, entry.path).filter(isOpen).length
+        ? this.issuesForFile(node.round, node.ownerId, entry.path).filter(isOpen).length
         : 0;
     if (openIssues > 0) {
       parts.push(`${openIssues} issue${openIssues > 1 ? "s" : ""}`);
+    }
+    if (this.roundView(node.round)?.manifest.replayConflicts?.includes(entry.path)) {
+      parts.push("with base changes");
     }
     item.description = parts.join("  ");
 
@@ -348,7 +432,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       hunkLabel(h),
       vscode.TreeItemCollapsibleState.None
     );
-    item.id = `${node.ownerId}:${node.entry.path}#${node.index}`;
+    item.id = `r${String(node.round)}/${node.ownerId}:${node.entry.path}#${String(node.index)}`;
     item.description = `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`;
     item.iconPath = new vscode.ThemeIcon("diff");
     item.checkboxState = this.checkbox(node);
@@ -373,7 +457,8 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     const resolved = !isOpen(issue);
     const confidence = issue.confidence === "verified" ? "verified" : "suspected";
     const parts: string[] = [issue.severity, confidence];
-    const outside = this.manifest !== undefined && isOutsideDiff(this.manifest, issue);
+    const own = this.roundView(issue.round)?.manifest;
+    const outside = own !== undefined && isOutsideDiff(own, issue);
     if (outside) parts.push("outside the diff");
     if (resolved) parts.push("resolved");
     item.description = parts.join(" · ");
@@ -392,13 +477,13 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     return item;
   }
 
-  private issuesRootItem(): vscode.TreeItem {
+  private issuesRootItem(round: number): vscode.TreeItem {
     // Unnumbered, unlike a chapter row: a chapter's number is a handle (`ch-2`,
     // `--chapter ch-2`), and there is no ch-0 for this row's number to name. The
     // findings under it still read 0.1, 0.2, and those ids do resolve.
     const item = new vscode.TreeItem("Issues", vscode.TreeItemCollapsibleState.Collapsed);
-    item.id = "issuesRoot";
-    const open = this.orphanIssues().filter(isOpen).length;
+    item.id = `r${String(round)}/issuesRoot`;
+    const open = this.orphanIssues(round).filter(isOpen).length;
     item.description = `${open} open`;
     item.iconPath = new vscode.ThemeIcon("warning");
     item.tooltip = textTooltip(
@@ -408,22 +493,28 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     return item;
   }
 
-  /** Reviewed/total review units across the whole manifest (backs the view header). */
+  /** Reviewed/total review units of the current round (backs the view header). */
   progressSummary(): { done: number; total: number } {
-    return this.manifest ? this.countUnits(allEntries(this.manifest)) : { done: 0, total: 0 };
+    const m = this.manifest;
+    return m ? this.countUnits(m.round, allEntries(m)) : { done: 0, total: 0 };
   }
 
-  private countUnits(entries: (FileEntry | UnassignedEntry)[]): {
+  private countUnits(
+    round: number,
+    entries: (FileEntry | UnassignedEntry)[]
+  ): {
     done: number;
     total: number;
   } {
     const keys = entries.flatMap(entryKeys);
     return {
-      done: keys.filter((k) => this.isReviewed(k)).length,
+      done: keys.filter((k) => this.isReviewed(round, k)).length,
       total: keys.length,
     };
   }
 }
+
+const short = (sha: string): string => sha.slice(0, 7);
 
 /**
  * Findings in numeric order rather than the order they were recorded. A finding

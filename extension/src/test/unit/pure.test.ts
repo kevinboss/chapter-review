@@ -10,6 +10,7 @@ import type { Hunk } from "../../model";
 
 const file = (path: string): FileNode => ({
   kind: "file",
+  round: 1,
   ownerId: "ch-1",
   entry: { path, status: "modified" },
 });
@@ -144,19 +145,19 @@ const labels = (nodes: Node[]): string[] =>
 
 describe("buildFolderTree", () => {
   it("keeps files at the root as files", () => {
-    const nodes = buildFolderTree("ch-1", [file("a.txt"), file("b.txt")]);
+    const nodes = buildFolderTree(1, "ch-1", [file("a.txt"), file("b.txt")]);
     assert.deepEqual(nodes.map((n) => n.kind), ["file", "file"]);
   });
 
   it("compresses a single-child chain into one folder row", () => {
-    const folder = asFolder(buildFolderTree("ch-1", [file("src/deep/nested/x.ts")])[0]);
+    const folder = asFolder(buildFolderTree(1, "ch-1", [file("src/deep/nested/x.ts")])[0]);
     assert.equal(folder.label, "src/deep/nested");
     assert.deepEqual(folder.children.map((c) => c.kind), ["file"]);
   });
 
   it("stops compressing where a folder branches", () => {
     const folder = asFolder(
-      buildFolderTree("ch-1", [file("src/a/x.ts"), file("src/b/y.ts")])[0]
+      buildFolderTree(1, "ch-1", [file("src/a/x.ts"), file("src/b/y.ts")])[0]
     );
     assert.equal(folder.label, "src");
     assert.deepEqual(labels(folder.children), ["a", "b"]);
@@ -164,7 +165,7 @@ describe("buildFolderTree", () => {
 
   it("stops compressing where a folder holds a file of its own", () => {
     const folder = asFolder(
-      buildFolderTree("ch-1", [file("src/top.ts"), file("src/deep/x.ts")])[0]
+      buildFolderTree(1, "ch-1", [file("src/top.ts"), file("src/deep/x.ts")])[0]
     );
     assert.equal(folder.label, "src");
     assert.deepEqual(
@@ -175,7 +176,7 @@ describe("buildFolderTree", () => {
   });
 
   it("sorts folders and files by name", () => {
-    assert.deepEqual(labels(buildFolderTree("ch-1", [file("z.ts"), file("a.ts")])), [
+    assert.deepEqual(labels(buildFolderTree(1, "ch-1", [file("z.ts"), file("a.ts")])), [
       "a.ts",
       "z.ts",
     ]);
