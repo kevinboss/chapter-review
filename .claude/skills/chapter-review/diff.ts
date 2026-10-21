@@ -33,18 +33,18 @@ export interface DiffFile {
 }
 
 /**
- * The diff `mergeBase..HEAD`, or undefined when git cannot answer (in which case
- * the caller skips the check rather than blocking the write).
+ * The diff a round partitions, `from..to`, or undefined when git cannot answer
+ * (in which case the caller skips the check rather than blocking the write).
  *
  * Flags match what SKILL.md tells the agent to run, so the hunk headers parsed
  * here are the ones it was told to copy into the draft. `--unified=3` in
  * particular decides where hunks split, and therefore what "claimed" means.
  */
-export function branchDiff(mergeBase: string): string | undefined {
+export function roundDiff(from: string, to: string): string | undefined {
   try {
     return execFileSync(
       "git",
-      ["diff", "-M", "--no-color", "--unified=3", `${mergeBase}..HEAD`],
+      ["diff", "-M", "--no-color", "--unified=3", `${from}..${to}`],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }
     );
   } catch {

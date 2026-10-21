@@ -4,6 +4,7 @@
 
 import test from "node:test";
 import { writeFileSync } from "node:fs";
+import path from "node:path";
 import assert from "node:assert/strict";
 import { cli, draft, OK_CHAPTERS, readJsonAs, withWrittenRepo } from "./helpers.ts";
 import type { Chapter } from "../.claude/skills/chapter-review/types.ts";
@@ -25,7 +26,7 @@ test("uncheck refuses a path that is not in the manifest", () => {
   withWrittenRepo((repo) => {
     const r = cli(["uncheck", "--path", "nope.txt"], { cwd: repo.dir });
     assert.equal(r.code, 1, r.all);
-    assert.match(r.err, /not in the current manifest/);
+    assert.match(r.err, /is in no round's diff/);
   });
 });
 
@@ -58,71 +59,57 @@ test("regeneration keeps chapter ids, preserves issues, carries checkmarks, prun
   });
 });
 
-test("a rename carries findings and checkmarks to the new path", () => {
+test("a new round follows a rename, and round 1 keeps its checkmarks", () => {
   withWrittenRepo((repo) => {
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "keep me"], { cwd: repo.dir });
     repo.writeProgress([{ path: "b.txt", digest: "cc33" }]);
 
     // Carry-forward matched the path string alone, so `git mv` read as a
-    // deletion and destroyed the file's finding and every checkmark on it.
-    // A pure rename: b.txt is one line, so -M only reports R100 when the content
-    // is identical to the merge-base side. With an edit on top of it git calls a
-    // file this small a delete plus an add, and there is no rename to follow.
+    // deletion and destroyed the file's finding. A pure rename, since git calls
+    // a one-line file with an edit on top a delete plus an add.
     repo.git("mv", "b.txt", "c.txt");
-    writeFileSync(`${repo.dir}/c.txt`, "b1\n");
     repo.git("commit", "-am", "rename b to c");
     const renamed: Chapter[] = [
-      OK_CHAPTERS[0],
-      {
-        id: "ch-2",
-        title: "edit a bottom + rename b",
-        files: [
-          { path: "a.txt", status: "modified", hunks: [{ oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 }] },
-          { path: "c.txt", status: "renamed", oldPath: "b.txt" },
-        ],
-      },
+      { id: "ch-2", title: "rename b", files: [{ path: "c.txt", status: "renamed", oldPath: "b.txt" }] },
     ];
     const r = cli(["write"], { cwd: repo.dir, input: draft(repo, renamed) });
     assert.equal(r.code, 0, r.all);
     assert.match(r.out, /followed rename iss-2\.1: b\.txt -> c\.txt/);
-    // Same chapter on both sides of the rename, so the number stays put.
     assert.doesNotMatch(r.out, /renumbered/);
-    assert.doesNotMatch(r.out, /pruned/);
 
     const issue = repo.readManifest().issues?.[0];
-    assert.equal(issue?.path, "c.txt", "the finding must follow the rename");
-    assert.equal(issue.chapterId, "ch-2");
-    assert.deepEqual(repo.readProgress(), [{ path: "c.txt", digest: "cc33" }]);
+    assert.deepEqual(
+      { path: issue?.path, round: issue?.round, chapterId: issue?.chapterId },
+      { path: "c.txt", round: 2, chapterId: "ch-2" }
+    );
+    assert.deepEqual(repo.readProgress(), [], "a new round starts unticked");
+    assert.deepEqual(
+      readJsonAs<{ reviewed: unknown[] }>(path.join(repo.gitDir, "chapter-review", "rounds", "1", "progress.json")).reviewed,
+      [{ path: "b.txt", digest: "cc33" }]
+    );
   });
 });
 
-test("a finding's hunk is re-keyed onto the range that now covers it", () => {
+test("a finding pinned to a range is found again in the new round", () => {
   withWrittenRepo((repo) => {
     cli(
       ["issue", "add", "--path", "a.txt", "--hunk", "5,1,5,1", "--severity", "low", "--note", "x"],
       { cwd: repo.dir }
     );
-    // Insert above, so the same content sits two lines further down.
-    writeFileSync(`${repo.dir}/a.txt`, "top1\ntop2\nl1\nL2\nl3\nl4\nL5\nl6\n");
-    repo.git("commit", "-am", "prepend two lines");
+    // Two lines on top and an edit to L5: one hunk in the round's diff.
+    writeFileSync(`${repo.dir}/a.txt`, "top1\ntop2\nl1\nL2\nl3\nl4\nL5!\nl6\n");
+    repo.git("commit", "-am", "prepend two lines, touch L5");
 
-    const shifted: Chapter[] = [
-      { id: "ch-1", title: "edit a top", files: [{ path: "a.txt", status: "modified", hunks: [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 5 }] }] },
-      {
-        id: "ch-2",
-        title: "edit a bottom + b",
-        files: [
-          { path: "a.txt", status: "modified", hunks: [{ oldStart: 5, oldLines: 1, newStart: 7, newLines: 1 }] },
-          { path: "b.txt", status: "modified" },
-        ],
-      },
+    const round2: Chapter[] = [
+      { id: "ch-2", title: "touch L5", files: [{ path: "a.txt", status: "modified", hunks: [{ oldStart: 1, oldLines: 6, newStart: 1, newLines: 8 }] }] },
     ];
-    assert.equal(cli(["write"], { cwd: repo.dir, input: draft(repo, shifted) }).code, 0);
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, round2) });
+    assert.equal(r.code, 0, r.all);
 
-    // Left alone, a stale anchor never self-corrects: nothing else rewrites it,
-    // so it survives every later regeneration pointing at the wrong lines.
-    const { hunk } = repo.readManifest().issues?.[0] ?? {};
-    assert.deepEqual(hunk, { oldStart: 5, oldLines: 1, newStart: 7, newLines: 1 });
+    // Round 1's coordinates mean nothing against round 2's diff, so the range is
+    // found through where its first line went.
+    const { hunk, round } = repo.readManifest().issues?.[0] ?? {};
+    assert.deepEqual({ hunk, round }, { hunk: { oldStart: 1, oldLines: 6, newStart: 1, newLines: 8 }, round: 2 });
   });
 });
 
@@ -190,42 +177,26 @@ test("a finding whose path is quarantined moves into the chapter-0 sequence", ()
   });
 });
 
-test("a second rename still carries the finding, via the merge-base name", () => {
+test("a finding follows a file renamed again in each round", () => {
   withWrittenRepo((repo) => {
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "keep me"], { cwd: repo.dir });
-    repo.writeProgress([{ path: "b.txt", digest: "cc33" }]);
 
-    const renameTo = (name: string, from: string): void => {
+    const renameTo = (name: string, from: string): ReturnType<typeof cli> => {
       repo.git("mv", from, name);
       repo.git("commit", "-am", `rename to ${name}`);
+      const chapters: Chapter[] = [
+        { id: "ch-2", title: `rename to ${name}`, files: [{ path: name, status: "renamed", oldPath: from }] },
+      ];
+      return cli(["write"], { cwd: repo.dir, input: draft(repo, chapters) });
     };
-    const chaptersWith = (path: string): Chapter[] => [
-      OK_CHAPTERS[0],
-      {
-        id: "ch-2",
-        title: "edit a bottom + rename b",
-        files: [
-          { path: "a.txt", status: "modified", hunks: [{ oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 }] },
-          { path, status: "renamed", oldPath: "b.txt" },
-        ],
-      },
-    ];
 
-    writeFileSync(`${repo.dir}/b.txt`, "b1\n"); // identical content, so -M reports R100
-    repo.git("commit", "-am", "restore b content");
-    renameTo("c.txt", "b.txt");
-    assert.equal(cli(["write"], { cwd: repo.dir, input: draft(repo, chaptersWith("c.txt")) }).code, 0);
+    assert.equal(renameTo("c.txt", "b.txt").code, 0);
     assert.equal(repo.readManifest().issues?.[0].path, "c.txt");
-
-    // git diffs against the merge base, so after a second move it reports
-    // b.txt -> d.txt and the intermediate c.txt never appears. Matching the
-    // stored path alone lost the file here.
-    renameTo("d.txt", "c.txt");
-    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, chaptersWith("d.txt")) });
+    const r = renameTo("d.txt", "c.txt");
     assert.equal(r.code, 0, r.all);
     assert.doesNotMatch(r.out, /pruned/);
-    assert.equal(repo.readManifest().issues?.[0].path, "d.txt", "the finding must survive a second rename");
-    assert.deepEqual(repo.readProgress(), [{ path: "d.txt", digest: "cc33" }]);
+    const issue = repo.readManifest().issues?.[0];
+    assert.deepEqual({ path: issue?.path, round: issue?.round }, { path: "d.txt", round: 3 });
   });
 });
 
@@ -256,16 +227,17 @@ test("write says whose review it is replacing when the branch changed", () => {
   });
 });
 
-test("a path that genuinely leaves the diff is still pruned", () => {
+test("a round that reverts a file takes its open finding along to the revert", () => {
   withWrittenRepo((repo) => {
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "drop me"], { cwd: repo.dir });
-    // Put b.txt back to its base content, so it drops out of mergeBase..HEAD.
+    // Back to its base content: out of the branch, but in what round 2 changed.
     writeFileSync(`${repo.dir}/b.txt`, "b1\n");
     repo.git("commit", "-am", "revert b");
-    const withoutB: Chapter[] = [OK_CHAPTERS[0], { ...OK_CHAPTERS[1], files: [OK_CHAPTERS[1].files[0]] }];
-    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, withoutB) });
+    const round2: Chapter[] = [{ id: "ch-2", title: "revert b", files: [{ path: "b.txt", status: "modified" }] }];
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, round2) });
     assert.equal(r.code, 0, r.all);
-    assert.match(r.out, /pruned 1 \(iss-2\.1\)/);
+    assert.doesNotMatch(r.out, /pruned/);
+    assert.equal(repo.readManifest().issues?.[0].round, 2);
   });
 });
 

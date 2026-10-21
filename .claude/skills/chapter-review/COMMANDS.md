@@ -53,8 +53,12 @@ On that second path, a `mergeBase` or `headSha` naming a commit this repo has ne
 Both SHAs may be stale (they get re-pinned) but must be commits this repo has; only `generatedAt` accepts a placeholder.
 A repo with no resolvable `HEAD` (empty, unborn branch, or `HEAD` pointing at a deleted ref) is refused outright.
 
-**What it preserves and re-pins.** It carries existing findings and the reviewer's checkmarks forward, pruning only entries whose path left the diff, so regeneration never loses review work.
-It re-pins `headSha`, `mergeBase` and `generatedAt` to the working tree it observes, so a regenerated manifest matches live git and the extension stops flagging the review as out of date.
+**What it preserves and re-pins.** It re-pins `headSha`, `mergeBase` and `generatedAt` to the working tree it observes, so a regenerated manifest matches live git and the extension stops flagging the review as out of date.
+It also settles `round`, `fromSha` and `replayConflicts` the way `base-check` reported them, so a draft needs none of the three: when the head has not moved since the last write, the draft re-partitions the current round, and when it has, the draft is the next round, which must partition `fromSha..HEAD`.
+Re-partitioning carries existing findings and the reviewer's checkmarks forward, pruning only entries whose path left the diff, so regeneration never loses review work.
+A new round instead keeps the previous one under `rounds/<n>/` with its checkmarks and starts unticked, takes along every open finding on a file it changes (re-anchored onto the new round, lines moved with the code), and leaves the other findings where they were; the report says so in a `round <n>: …` line, and its opening sentence counts the chapter ids reused from earlier rounds instead of chapters kept or dropped, since a chapter the round leaves out lives on in its round. Every other write says which round it re-partitioned, or that it started round 1 on the whole branch.
+On another branch it starts again at round 1 and drops the earlier rounds.
+The commits each round's diff is read from stay pinned under `refs/worktree/chapter-review/`, so a force-push cannot let gc take them.
 
 **Reading the report.** The summary opens with `Wrote <n> chapters across <n> files (<n> claims)`.
 A "claim" is one *enumerated hunk*, except that a whole-file entry (no `hunks` array) counts as exactly 1 however many hunks the diff holds for it; `unassigned` entries are claims too, and `files` counts distinct paths.
@@ -69,6 +73,7 @@ Both fire for one finding when its file was renamed *and* its chapter changed, a
 
 `chapter-review issue add --path P --severity S --note "…" [--line N] [--confidence suspected|verified] [--chapter ch-N] [--hunk oldStart,oldLines,newStart,newLines] [--old-path P]` — record a finding.
 The id is assigned for you and the owning chapter is inferred from `--path`.
+The finding is anchored in the latest round whose diff holds `--path`: usually the current one, but a file an earlier round changed and later rounds left alone is still reviewed in that earlier round, so its finding goes there, and the command says `(round <n>)`. Its `--line`, range and chapter are then that round's. A path no round holds is outside the diff, in the current round.
 Ids are numbered per chapter (the schema's `id` gives the shape), which is what makes the number quotable off the extension's tree, where a chapter row reads `2 · <title>` and its findings `2.1`, `2.2`.
 `--line` is the line of the file at the reviewed commit that the finding is about, and the extension opens the finding there.
 In the diff it also pins the finding to the claimed range holding that line, which picks the owning chapter, so a finding about specific code needs `--line` and nothing else; given with `--hunk`, the line must lie inside that range.
@@ -79,7 +84,7 @@ When the path lives in **one** chapter that's unambiguous; when it spans **sever
 Omit both `--line` and `--hunk` and the finding anchors to the whole file.
 This second job works on a file claimed whole too: the partition enumerates no ranges there, but the file still has `@@` hunks, and one of them can anchor a finding about that whole range.
 Two findings about different lines of one file need no `--hunk` to tell them apart: their lines already do.
-`issue list` prints the line and the range each finding carries, so you can see which you got; a finding with no range shows none.
+`issue list` prints the line and the range each finding carries, so you can see which you got; a finding with no range shows none. A finding anchored in an earlier round says `round <n>` next to its chapter; one without it is in the current round.
 A finding defaults to `confidence: suspected`; see SKILL.md step 7.
 `--path` must name a path the manifest holds, in a chapter or in `unassigned`, unless it comes with `--line` (see [Findings outside the diff](#findings-outside-the-diff)); a path in neither place is refused, because without a line it anchors to nothing the reviewer can open.
 Findings anchor to **chapters only**: `--chapter` takes `ch-<number>`, never `unassigned`.
@@ -115,14 +120,18 @@ Reaching for `--hunk` to change chapters re-anchors the finding to that exact ra
 ### uncheck
 
 `chapter-review uncheck --path P [--hunk oldStart,oldLines,newStart,newLines]` — clear the reviewer's checkmark on a file (or one hunk) so it reads as unreviewed again.
-It removes the matching unit from `progress.json`, the same kind of direct edit as `issue resolve`; the extension unticks the box, and if the reviewer re-checks it the extension writes it back.
+It removes the matching unit from the checkmarks of the latest round whose diff holds the path, the same kind of direct edit as `issue resolve`; the extension unticks the box, and if the reviewer re-checks it the extension writes it back.
 Use it on regeneration for a file whose bytes didn't change but whose correctness now depends on one that did, or mid-review to send the reviewer back to something.
 
 ### base-check
 
-`chapter-review base-check [base]` — report whether the review base is fresh before you diff against it (read-only: never fetches, never writes).
+`chapter-review base-check [base]` — report whether the review base is fresh before you diff against it, and which review round the next `write` makes.
+It never fetches and never touches the worktree or a branch.
 Prints JSON with an `action` (`ok` / `switch` / `fetch` / `unresolved`); SKILL.md step 1 acts on it.
 Pass the base you resolved to check that exact ref, or omit it to let the command resolve the base the same way step 1 does.
+
+On `ok` only, since only then is the merge base settled, the JSON also carries `round`: `number`, `new` (false when the head has not moved since the last write, so the write re-partitions that round), `fromSha` and `diff` (the command whose output that round partitions), `replayConflicts` when there are any, and `chapters`, every chapter id the review has used with its latest title, the rounds it appears in and the files it held, for a new round to reuse.
+When the merge base moved since the last round, `fromSha` is the previous head replayed onto the new merge base: a commit `base-check` creates and pins inside `.git`, with the same id however often it is asked.
 
 **`action` is the only field that decides what you *do* about the base.**
 The rest is diagnostic context you may still read and report; step 1's `ok` branch has you mention a skipped remote check, which is reporting a field, not branching on it: `base`, `baseSha`, `mergeBase`, `message` (a prose version of the verdict), `remoteReachable`, `remoteTip`, plus `unfetched` (a boolean, always present once the base resolved, `true` is what drives a `fetch` verdict) and `suggestedBase` / `suggestedMergeBase` / `ahead`.
@@ -151,4 +160,5 @@ Nothing enforces this; sequential calls are the contract.
 - **A `hunks` object and a `--hunk` flag are the same four numbers in two spellings.** The flag takes them as a bare comma-separated list in schema order, so `--hunk 7,9,8,14` names the range a draft spells `{ "oldStart": 7, "oldLines": 9, "newStart": 8, "newLines": 14 }`.
 - **`issues` and `issueSeq` are the CLI's, not yours.** `chapter-review issue …` assigns ids, infers the owning chapter and preserves both across regeneration; `write` refuses a draft carrying `issues` at all. The durable anchor is `path` (+ `hunk`), so `chapterId` re-maps itself when a path moves chapters, and the id is renumbered with it: an id's chapter part must agree with its `chapterId`, and `validate.ts` refuses a manifest where it doesn't.
 - **Chapter ids start at `ch-1`.** `ch-0` is refused: 0 is the issue sequence for findings no chapter owns, which is what `iss-0.N` and `issueSeq["0"]` refer to.
+- **Earlier rounds are kept, not rewritten.** `<git-dir>/chapter-review/rounds/<n>/chapters.json` holds round n's partition, without findings, which all stay in the current manifest with their `round`; `rounds/<n>/progress.json` holds the checkmarks made in it. `show` prints the current round only.
 - **Checkmarks are a separate document you never author**: `<git-dir>/chapter-review/progress.json`, owned by the extension, read by the CLI, and cleared only by `uncheck`. A unit reads as checked while its stored digest matches current content, which is what re-opens a file whose bytes moved and leaves an untouched one ticked.

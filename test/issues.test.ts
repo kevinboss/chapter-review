@@ -377,7 +377,7 @@ test("issue add and set refuse a chapter that does not claim the pinned range", 
   });
 });
 
-test("write names findings whose range no chapter claims any more", () => {
+test("a new round takes an open finding along to the fix that landed on it", () => {
   withWrittenRepo((repo) => {
     const add = cli(
       ["issue", "add", "--path", "a.txt", "--hunk", "5,1,5,1", "--severity", "low",
@@ -386,35 +386,24 @@ test("write names findings whose range no chapter claims any more", () => {
     );
     assert.equal(add.code, 0, add.all);
 
-    // The author fixes it, so that hunk leaves the diff while the top edit stays.
-    // Re-keying has nothing to move the finding onto and leaves the coordinates,
-    // which is the state the extension cannot place.
     writeFileSync(`${repo.dir}/a.txt`, "l1\nL2\nl3\nl4\nl5\nl6\n");
     repo.git("commit", "-am", "fix L5");
-    const chapters: Chapter[] = [
-      {
-        id: "ch-1",
-        title: "edit a top",
-        files: [
-          {
-            path: "a.txt",
-            status: "modified",
-            hunks: [{ oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 }],
-          },
-        ],
-      },
-      { id: "ch-2", title: "edit b", files: [{ path: "b.txt", status: "modified" }] },
+    const round2: Chapter[] = [
+      { id: "ch-2", title: "fix L5", files: [{ path: "a.txt", status: "modified" }] },
     ];
-    const r = cli(["write"], {
-      cwd: repo.dir,
-      input: draft(repo, chapters, { headSha: repo.git("rev-parse", "HEAD").trim() }),
-    });
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, round2) });
 
     assert.equal(r.code, 0, r.all);
-    assert.match(r.out, /1 finding whose range no chapter claims any more/);
-    // The number it answers to now: this write re-homed it out of ch-2.
-    assert.match(r.out, /iss-1\.\d: a\.txt @@ -5,1 \+5,1 @@/);
-    assert.match(r.out, /issue resolve.*issue set/s);
+    assert.match(r.out, /round 2: what changed since round 1/);
+    assert.match(r.out, /of the findings, 1 open on files this round changes came along and 0 open stay/);
+    assert.match(r.out, /1\/1 chapter ids reused from earlier rounds/);
+    assert.match(r.out, /came along with their own line untouched: iss-2\.1\. Re-read each/);
+    assert.doesNotMatch(r.out, /dropped ch-1/);
+    const [issue] = repo.readManifest().issues ?? [];
+    assert.deepEqual(
+      { id: issue.id, round: issue.round, chapterId: issue.chapterId },
+      { id: "iss-2.1", round: 2, chapterId: "ch-2" }
+    );
   });
 });
 

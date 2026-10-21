@@ -55,6 +55,49 @@ export const manifestPath = (): string => path.join(protocolDir(), "chapters.jso
 export const progressPath = (): string => path.join(protocolDir(), "progress.json");
 /** Absolute path to the extension's focus pointer file, inside the git dir. */
 export const focusPath = (): string => path.join(protocolDir(), "focus.json");
+/** Where earlier rounds are kept, one directory per round number. */
+export const roundsDir = (): string => path.join(protocolDir(), "rounds");
+/** An earlier round's manifest, read-only once archived. */
+export const roundManifestPath = (round: number): string =>
+  path.join(roundsDir(), String(round), "chapters.json");
+/** An earlier round's checkmarks, still written by the extension. */
+export const roundProgressPath = (round: number): string =>
+  path.join(roundsDir(), String(round), "progress.json");
+
+// Per worktree: gc in any worktree honours these refs, and two worktrees
+// reviewing different branches cannot release each other's.
+export const PIN_PREFIX = "refs/worktree/chapter-review/";
+
+/**
+ * Keep exactly `commits` reachable through pin refs. A round's head stops being
+ * referenced once the author force-pushes a fixup, and a replayed base never was,
+ * so without a pin gc deletes the commits an earlier round's diff is read from.
+ * A commit this repo does not have is skipped.
+ */
+export function syncPins(commits: ReadonlySet<string>): void {
+  const listed = gitTry("for-each-ref", "--format=%(refname)", PIN_PREFIX) ?? "";
+  const have = new Set(
+    listed
+      .split("\n")
+      .filter((ref) => ref.startsWith(PIN_PREFIX))
+      .map((ref) => ref.slice(PIN_PREFIX.length))
+  );
+  const ops = [...have].filter((sha) => !commits.has(sha)).map((sha) => `delete ${PIN_PREFIX}${sha}`);
+  for (const sha of commits) {
+    if (!have.has(sha) && gitOk("cat-file", "-e", `${sha}^{commit}`)) {
+      ops.push(`create ${PIN_PREFIX}${sha} ${sha}`);
+    }
+  }
+  if (ops.length === 0) return;
+  try {
+    execFileSync("git", ["update-ref", "--stdin"], {
+      input: ops.join("\n") + "\n",
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+  } catch {
+    console.error("chapter-review: could not update the pins that keep earlier rounds' commits.");
+  }
+}
 
 /**
  * Soft git query for the commit pin: trimmed stdout, or undefined when git

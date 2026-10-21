@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { die, isArray, isRecord, tryReadJson } from "./util.ts";
-import { gitOk, gitTry, manifestPath, sameCommit, short } from "./git.ts";
+import { gitOk, gitTry, manifestPath, sameCommit, short, syncPins } from "./git.ts";
 import {
   carryIssues,
   carryReviewed,
+  currentPathFor,
   installManifest,
   issuesOf,
   priorStateForCarry,
@@ -13,7 +14,8 @@ import {
   withIssues,
 } from "./manifest.ts";
 import { isManifest, validateManifest } from "./validate.ts";
-import { branchDiff, coverageErrors, moveLine, parseHunks } from "./diff.ts";
+import { coverageErrors, moveLine, parseHunks, roundDiff } from "./diff.ts";
+import { archiveRound, clearRounds, earlierRounds, roundBase, roundCommits } from "./rounds.ts";
 import type { Issue, Manifest, ManifestStats, MovedLine, ReviewedUnit } from "./types.ts";
 
 /** A draft as it arrives from outside: a JSON object whose shape is unverified. */
@@ -66,6 +68,22 @@ export function repinCommits(draft: unknown): string[] {
       notes.push(`mergeBase ${short(drafted)}->${short(liveMergeBase)}`);
     }
     draft.mergeBase = liveMergeBase;
+  }
+  // Settled here from the installed manifest rather than taken from the draft:
+  // whether the head moved since the last write decides the round, and the
+  // replayed base is the same commit `base-check` printed.
+  const headSha = str(draft, "headSha");
+  const mergeBase = str(draft, "mergeBase");
+  if (headSha !== undefined && mergeBase !== undefined) {
+    const { round, fromSha, replayConflicts } = roundBase(
+      priorStateForCarry().prior,
+      str(draft, "head") ?? "",
+      headSha,
+      mergeBase
+    );
+    draft.round = round;
+    draft.fromSha = fromSha;
+    draft.replayConflicts = replayConflicts.length > 0 ? replayConflicts : undefined;
   }
   draft.generatedAt = new Date().toISOString();
   return notes;
@@ -278,7 +296,7 @@ export function cmdWrite(argv: string[] = []): void {
  * than leaving the caller to read silence as success.
  */
 function assertCoversDiff(manifest: Manifest): boolean {
-  const diffText = branchDiff(manifest.mergeBase);
+  const diffText = roundDiff(manifest.fromSha, manifest.headSha);
   if (diffText === undefined) {
     console.error(
       "chapter-review: could not read the diff, so coverage was not checked; " +
@@ -292,9 +310,13 @@ function assertCoversDiff(manifest: Manifest): boolean {
   // regenerating without noticing.
   if (diffText.trim() === "") {
     die(
-      `chapter-review: ${manifest.head} has no changes against ${manifest.base}, ` +
-        "so there is nothing to partition.\n" +
-        "  Check you are on the branch you meant to review, and that the base is right."
+      manifest.round === 1
+        ? `chapter-review: ${manifest.head} has no changes against ${manifest.base}, ` +
+            "so there is nothing to partition.\n" +
+            "  Check you are on the branch you meant to review, and that the base is right."
+        : `chapter-review: nothing changed since round ${String(manifest.round - 1)} ` +
+            `(${short(manifest.fromSha) ?? ""}..${short(manifest.headSha) ?? ""} is empty), ` +
+            "so there is no new round to partition."
     );
   }
   const errors = coverageErrors(manifest, diffText);
@@ -304,6 +326,12 @@ function assertCoversDiff(manifest: Manifest): boolean {
   console.error(
     "  Every hunk belongs to exactly one chapter, or to unassigned with a reason."
   );
+  if (manifest.round > 1) {
+    console.error(
+      `  This is round ${String(manifest.round)}: partition \`git diff -M --unified=3 ` +
+        `${manifest.fromSha}..HEAD\`, what changed since round ${String(manifest.round - 1)}.`
+    );
+  }
   process.exit(1);
 }
 
@@ -338,23 +366,45 @@ function installDraft(
         `with one for "${asManifest.head}". The previous one is only in ${manifestPath()}.bak.`
     );
   }
+  const sameBranch = prior !== null && prior.head === asManifest.head;
+  const newRound = sameBranch && asManifest.round !== prior.round;
+  const earlier = sameBranch ? earlierRounds() : [];
+  const roundOf = (n: number): Manifest | null =>
+    prior !== null && n === prior.round ? prior : (earlier.find((m) => m.round === n) ?? null);
+
+  // A re-partition re-anchors the current round's findings. A new round takes
+  // along every open finding on a file it changes, so the reviewer meets it next
+  // to the fix; the others stay in the round they were raised in.
   const priorIssues: Issue[] = issuesOf(prior);
-  const at = asManifest.headSha ?? "HEAD";
-  const from = prior?.headSha;
-  const lineMover = (fromPath: string, toPath: string, line: number): MovedLine => {
+  const reanchors = (i: Issue): boolean =>
+    !sameBranch ||
+    (newRound
+      ? i.status !== "resolved" && currentPathFor(asManifest, i.path, roundOf(i.round)) !== undefined
+      : i.round === prior.round);
+  const staying = priorIssues.filter((i) => !reanchors(i));
+  const at = asManifest.headSha;
+  const lineMover = (
+    round: Manifest | null | undefined,
+    fromPath: string,
+    toPath: string,
+    line: number
+  ): MovedLine => {
+    const from = round?.headSha;
     if (from === undefined || (sameCommit(from, at) && fromPath === toPath)) {
       return { line };
     }
     const diff = gitTry("diff", "--no-color", "--unified=0", `${from}:${fromPath}`, `${at}:${toPath}`);
     return moveLine(line, diff === undefined ? [] : parseHunks(diff.split("\n")));
   };
-  const { kept, pruned, moved, renumbered, unanchored, entered, uncaused, edited, removed } = carryIssues(
-    priorIssues,
-    asManifest,
-    prior,
-    (p) => gitOk("cat-file", "-e", `${at}:${p}`),
-    lineMover
-  );
+  const carried = carryIssues(priorIssues.filter(reanchors), asManifest, {
+    priorFor: (i) => roundOf(i.round),
+    seq: { manifest: prior, issues: staying },
+    fileAtHead: (p) => gitOk("cat-file", "-e", `${at}:${p}`),
+    moveLine: lineMover,
+  });
+  const { pruned, moved, renumbered, unanchored, entered, uncaused, edited, removed } = carried;
+  const kept = [...staying, ...carried.kept];
+  const cameAlong = newRound ? carried.kept.length : 0;
 
   // From the issues as they were *before* pruning, so an id regeneration drops
   // is retired rather than handed out again. A draft carries no mark of its own.
@@ -362,8 +412,10 @@ function installDraft(
   if (seq) asManifest.issueSeq = seq;
 
   // Carry the checkmarks forward too, pruning units whose path left the diff.
-  // They live in progress.json; the manifest never carries them again.
-  const priorReviewed: ReviewedUnit[] = readProgress();
+  // They live in progress.json; the manifest never carries them again. A new
+  // round starts unticked: what the reviewer ticked belongs to the round they
+  // ticked it in, and is archived with it.
+  const priorReviewed: ReviewedUnit[] = newRound ? [] : readProgress();
   const {
     kept: carriedReviewed,
     gone: reviewedGone,
@@ -386,9 +438,14 @@ function installDraft(
     // opening sentence alone. "carried", not "kept": these are rows that survived
     // path-pruning, and whether one still reads as reviewed is decided against
     // content by the extension, so "kept" would promise a check the CLI does not do.
+    // A new round holds only the chapters its changes touch: the others are not
+    // dropped, they stay in the rounds before, so there is no "kept" ratio to give.
+    const knownIds = new Set([...earlier, ...(prior ? [prior] : [])].flatMap((m) => m.chapters.map((c) => c.id)));
+    const reusedCh = chapters.filter((c) => knownIds.has(c.id)).length;
     const clauses = [
-      priorChapterIds.size > 0 && `${keptCh}/${chapters.length} chapters kept from last run`,
-      goneChapters.length > 0 && `dropped ${goneChapters.join(", ")}`,
+      newRound && `${reusedCh}/${chapters.length} chapter ids reused from earlier rounds`,
+      !newRound && priorChapterIds.size > 0 && `${keptCh}/${chapters.length} chapters kept from last run`,
+      !newRound && goneChapters.length > 0 && `dropped ${goneChapters.join(", ")}`,
       kept.length > 0 && `${kept.length} issues preserved`,
       pruned.length > 0 && `pruned ${pruned.length} (${pruned.join(", ")})`,
       carriedReviewed.length > 0 && `${carriedReviewed.length} checkmarks carried`,
@@ -398,6 +455,40 @@ function installDraft(
     const opening = `${dryRun ? "Would write" : "Wrote"} ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
     console.log(`${[opening, ...clauses].join(", ")}.`);
     console.log(dryRun ? `  would write ${dest} (--dry-run: nothing changed)` : `  wrote ${dest}`);
+    if (newRound) {
+      const replayed = sameCommit(asManifest.fromSha, prior.headSha)
+        ? ""
+        : `, round ${String(prior.round)}'s head ${short(prior.headSha) ?? ""} replayed onto the moved base as ${short(asManifest.fromSha) ?? ""}`;
+      console.log(
+        `  round ${String(asManifest.round)}: what changed since round ${String(prior.round)} ` +
+          `(${short(asManifest.fromSha) ?? ""}..${short(asManifest.headSha) ?? ""}${replayed}); round ` +
+          `${String(prior.round)} is kept with its checkmarks; of the findings, ${String(cameAlong)} ` +
+          `open on files this round changes came along and ${String(staying.filter((i) => i.status !== "resolved").length)} ` +
+          "open stay in the round they are anchored in"
+      );
+      // The ones a list below names are read there; the rest changed nowhere a
+      // list looks, which is exactly where a fix on new lines leaves them.
+      const listed = new Set([...edited, ...removed].map((line) => line.split(":")[0]));
+      const quiet = carried.kept.map((i) => i.id).filter((id) => !listed.has(id));
+      if (quiet.length > 0) {
+        console.log(
+          `  came along with their own line untouched: ${quiet.join(", ")}. Re-read each against ` +
+            "this round's diff, since a fix can land on new lines."
+        );
+      }
+    } else {
+      console.log(
+        sameBranch
+          ? `  round ${String(asManifest.round)}, re-partitioned`
+          : `  round ${String(asManifest.round)}: the whole branch`
+      );
+    }
+    if (asManifest.replayConflicts !== undefined) {
+      console.log(
+        "  the base moved and these files did not replay onto it cleanly, so their round diff " +
+          `also shows what the base changed: ${asManifest.replayConflicts.join(", ")}`
+      );
+    }
     // On both paths, so the dry run and the real write print the same report and
     // a missing verdict never reads as a skipped check.
     console.log(
@@ -489,8 +580,15 @@ function installDraft(
     return;
   }
   installManifest(finalManifest, report);
-  // After the manifest lands, so a refused install leaves progress untouched.
+  // After the manifest lands, so a refused install leaves the earlier rounds and
+  // progress untouched.
+  if (newRound) {
+    archiveRound(prior);
+  } else if (!sameBranch) {
+    clearRounds();
+  }
   if (carriedReviewed.length > 0 || priorReviewed.length > 0) {
     writeProgress(carriedReviewed);
   }
+  syncPins(roundCommits([...earlierRounds(), finalManifest]));
 }

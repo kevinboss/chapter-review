@@ -20,7 +20,7 @@ function usage(code: number): never {
       "",
       "  focus                     print what the reviewer is looking at",
       "  show                      print the current manifest",
-      "  base-check [base]         report whether the review base is fresh (read-only)",
+      "  base-check [base]         report whether the review base is fresh, and the next round",
       "  write [file] [--dry-run]  validate a partition draft, then install it (stdin if no file)",
       "                            --dry-run reports the counts and changes nothing",
       "  uncheck <flags>           clear a review checkmark (--path [--hunk]) so it re-reads",

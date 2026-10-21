@@ -166,8 +166,8 @@ const TOOLS: Tool[] = [
   {
     name: "base_check",
     description:
-      "Whether the review base is fresh, as JSON with an `action`. Read-only, never fetches. Same as `chapter-review base-check [base]`.",
-    readOnly: true,
+      "Whether the review base is fresh, as JSON with an `action`, and on `ok` the review round the next `write` makes. Never fetches; may create and pin a replayed base commit inside .git. Same as `chapter-review base-check [base]`.",
+    readOnly: false,
     properties: {
       base: { type: "string", description: "The base you resolved. Omit to let the command resolve it." },
     },
