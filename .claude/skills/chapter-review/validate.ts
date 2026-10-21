@@ -168,13 +168,13 @@ function checkIssue(issue: unknown, label: string, push: Push): void {
     if (typeof issue.line !== "number" || !Number.isSafeInteger(issue.line) || issue.line < 1) {
       push(`${label}.line must be an integer from 1`);
     }
-    if (issue.hunk !== undefined || issue.oldPath !== undefined) {
-      push(`${label} has a line, so it sits outside the diff and cannot carry a hunk or oldPath`);
-    }
   }
   if (issue.cause !== undefined) {
     if (issue.line === undefined) {
       push(`${label}.cause applies only to a finding outside the diff, which has a line`);
+    }
+    if (issue.hunk !== undefined || issue.oldPath !== undefined) {
+      push(`${label} has a cause, so it sits outside the diff and cannot carry a hunk or oldPath`);
     }
     if (isObject(issue.cause)) {
       checkPath(issue.cause.path, `${label}.cause.path`, push);

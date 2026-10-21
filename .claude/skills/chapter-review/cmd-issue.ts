@@ -10,6 +10,7 @@ import {
   issueBucket,
   issuesOf,
   nextIssueId,
+  claimedRangeAt,
   ownerChapterId,
   pathInManifest,
   readManifestOrDie,
@@ -87,26 +88,28 @@ function requireRealPath(manifest: Manifest, p: string | undefined, flag = "--pa
   );
 }
 
+/** Is this a finding on a file the branch does not change? */
+const isOutside = (manifest: Manifest, issue: Partial<Issue>): boolean =>
+  issue.line !== undefined && issue.path !== undefined && !pathInManifest(manifest, issue.path);
+
 /**
- * Reject a finding outside the diff that points at nothing: a file missing at the
- * reviewed commit, a line past its end, or a file the branch does change, which
- * anchors with --hunk instead.
+ * Reject a finding outside the diff that carries a change's coordinates: there
+ * is no change on that file for a --hunk or --old-path to describe.
  */
 function requireOutsideAnchor(manifest: Manifest, issue: Partial<Issue>): void {
-  const { path: p, line } = issue;
-  if (p === undefined || line === undefined) return;
   if (issue.hunk !== undefined || issue.oldPath !== undefined) {
     die(
-      "chapter-review: --line is for a file the branch does not change, and --hunk " +
-        "and --old-path describe a change. Pass one or the other."
+      `chapter-review: ${issue.path ?? "that file"} is not in the diff, so it has no change ` +
+        "for --hunk or --old-path to describe. Pass --line alone."
     );
   }
-  if (pathInManifest(manifest, p)) {
-    die(
-      `chapter-review: ${p} is in the diff, so a finding on it anchors with --hunk ` +
-        "(or to the whole file), not --line."
-    );
-  }
+  requireLineAtHead(manifest, issue);
+}
+
+/** Reject a --line on a file missing at the reviewed commit, or past its end. */
+function requireLineAtHead(manifest: Manifest, issue: Partial<Issue>): void {
+  const { path: p, line } = issue;
+  if (p === undefined || line === undefined) return;
   const at = manifest.headSha ?? "HEAD";
   const text = gitTry("show", `${at}:${p}`);
   if (text === undefined) {
@@ -119,6 +122,27 @@ function requireOutsideAnchor(manifest: Manifest, issue: Partial<Issue>): void {
   if (line > lines) {
     die(`chapter-review: ${p} has ${String(lines)} lines at ${short(at) ?? at}; --line ${String(line)} is past the end.`);
   }
+}
+
+/**
+ * The range a finding in the diff with a --line is pinned to: the --hunk it came
+ * with, which must hold the line, or else the claimed range that does. None when
+ * the line sits outside every range the partition claims, an unchanged line of a
+ * changed file, or one the partition claims whole.
+ */
+function rangeForLine(manifest: Manifest, issue: Partial<Issue>): Hunk | undefined {
+  const { path: p, line, hunk } = issue;
+  if (p === undefined || line === undefined) return hunk;
+  requireLineAtHead(manifest, issue);
+  if (hunk === undefined) return claimedRangeAt(manifest, p, line);
+  if (line < hunk.newStart || line >= hunk.newStart + hunk.newLines) {
+    die(
+      `chapter-review: --line ${String(line)} is not inside ${hunkHeader(hunk)}, whose new side ` +
+        `runs ${String(hunk.newStart)}-${String(hunk.newStart + hunk.newLines - 1)}. ` +
+        "Drop --hunk and the range holding the line is picked for you."
+    );
+  }
+  return hunk;
 }
 
 /**
@@ -164,16 +188,14 @@ const ISSUE_FLAGS = [
 ];
 
 const CAUSE_NEEDS_LINE =
-  "chapter-review: --cause-path is for a finding outside the diff, which takes --line. " +
-  "A finding in the diff takes its chapter from its own path.";
+  "chapter-review: --cause-path is for a finding on a file the branch does not change, " +
+  "which takes --line. A finding in the diff takes its chapter from its own path.";
 
 /** Where a finding points, as `issue list` and the confirmations print it. */
 const location = (i: Issue): string =>
-  i.line !== undefined
-    ? `${i.path}:${String(i.line)}`
-    : i.hunk
-      ? `${i.path} ${hunkHeader(i.hunk)}`
-      : i.path;
+  [i.line === undefined ? i.path : `${i.path}:${String(i.line)}`, i.hunk && hunkHeader(i.hunk)]
+    .filter(Boolean)
+    .join(" ");
 
 /**
  * Reject an --old-path that disagrees with the rename the partition records.
@@ -318,7 +340,8 @@ function issueUsage(code: number): never {
       "flags for add and set:",
       "  --path P             file the finding is about; in the diff, or with --line",
       "                       a file the branch left wrong without changing it",
-      "  --line N             line of a --path outside the diff, at the reviewed commit",
+      "  --line N             the line the finding is about, in --path at the reviewed",
+      "                       commit; inside the diff it also picks the range",
       "  --cause-path P       for a finding outside the diff: the file whose change",
       "                       left it wrong, which picks the chapter",
       "  --cause-hunk o,ol,n,nl  the range of --cause-path responsible",
@@ -359,7 +382,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       // The loop above exits the process unless all three are set.
       const { path: fieldPath } = fields;
       if (fieldPath === undefined) return;
-      const outside = fields.line !== undefined;
+      const outside = isOutside(manifest, fields);
       if (outside) {
         fields.chapterId = settleOutside(manifest, fields, fields.chapterId);
       } else {
@@ -367,6 +390,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         requireRealPath(manifest, fieldPath);
         requireRealOldPath(manifest, fieldPath, fields.oldPath);
         requireRealHunk(manifest, fieldPath, fields.hunk);
+        fields.hunk = rangeForLine(manifest, fields);
         requireChapterOwnsPath(manifest, fieldPath, fields.chapterId);
         requireChapterOwnsHunk(manifest, fieldPath, fields.hunk, fields.chapterId);
       }
@@ -405,8 +429,11 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         if (owners.length > 1 && fields.hunk === undefined) {
           console.error(
             `chapter-review: ${fields.path} spans ${owners.map((o) => o.id).join(", ")}; ` +
-              `recorded in ${inferred} and anchored to the whole file. ` +
-              `pass --chapter to choose, or --hunk to pin a range.`
+              (fields.line === undefined
+                ? `recorded in ${inferred} and anchored to the whole file. ` +
+                  "pass --chapter to choose, or --line or --hunk to pin it."
+                : `recorded in ${inferred}, since no range of it holds line ${String(fields.line)}. ` +
+                  "pass --chapter to choose.")
           );
         }
         // Nothing to infer from means the path is quarantined, and the guidance
@@ -478,7 +505,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         updates.hunk !== undefined ||
         updates.line !== undefined ||
         updates.cause !== undefined;
-      if (issue.line !== undefined) {
+      if (isOutside(manifest, issue)) {
         const owner = settleOutside(manifest, issue, updates.chapterId);
         if (reanchored || updates.chapterId !== undefined) issue.chapterId = owner;
       } else {
@@ -488,6 +515,9 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         requireRealOldPath(manifest, issue.path, updates.oldPath);
         requireChapterOwnsPath(manifest, issue.path, updates.chapterId);
         requireRealHunk(manifest, issue.path, issue.hunk);
+        if (issue.line !== undefined && (updates.line !== undefined || updates.hunk !== undefined)) {
+          issue.hunk = rangeForLine(manifest, { ...issue, hunk: updates.hunk });
+        }
         // Against the chapter the finding ends up in: an explicit --chapter wins,
         // and without one the owner is re-read off the anchor below, which cannot
         // disagree with it.
@@ -584,7 +614,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
           ? `, caused by ${i.cause.path}${i.cause.hunk ? ` ${hunkHeader(i.cause.hunk)}` : ""}`
           : "";
         const where =
-          i.line !== undefined
+          isOutside(manifest, i)
             ? ` (${i.chapterId ?? "no chapter"}, outside the diff${cause})`
             : i.chapterId
               ? ` (${i.chapterId})`

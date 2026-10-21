@@ -30,7 +30,7 @@ const FINDING: Issue = {
 suite("row tooltips", () => {
   test("every kind survives the pointer entering it", () => {
     const all: vscode.MarkdownString[] = [
-      issueTooltip(FINDING),
+      issueTooltip(FINDING, false),
       chapterTooltip("ch-1", "edits a"),
       chapterTooltip("ch-1"),
       fileTooltip("old.txt", "renamed"),
@@ -44,14 +44,14 @@ suite("row tooltips", () => {
   });
 
   test("the severity chip survives the sanitizer", () => {
-    const style = /<span style="([^"]+)"/.exec(issueTooltip(FINDING).value)?.[1];
+    const style = /<span style="([^"]+)"/.exec(issueTooltip(FINDING, false).value)?.[1];
     assert.ok(style, "the chip should carry an inline style");
     assert.match(style, SPAN_STYLE);
-    assert.equal(issueTooltip(FINDING).supportHtml, true, "the chip is a span");
+    assert.equal(issueTooltip(FINDING, false).supportHtml, true, "the chip is a span");
   });
 
   test("a finding tooltip carries the note and the path the row omits", () => {
-    const { value } = issueTooltip(FINDING);
+    const { value } = issueTooltip(FINDING, false);
     assert.match(value, /L2 loses the guard/);
     assert.match(value, /`src\/a\.txt`/);
     assert.match(value, /CRITICAL/);
@@ -59,23 +59,29 @@ suite("row tooltips", () => {
   });
 
   test("a finding outside the diff shows its line and its cause", () => {
-    const { value } = issueTooltip({ ...FINDING, line: 89, cause: { path: "src/b.txt" } });
+    const { value } = issueTooltip({ ...FINDING, line: 89, cause: { path: "src/b.txt" } }, true);
     assert.match(value, /`src\/a\.txt:89` · outside the diff/);
     assert.match(value, /caused by `src\/b\.txt`/);
   });
 
+  test("a finding in the diff shows its line without calling it outside", () => {
+    const { value } = issueTooltip({ ...FINDING, line: 12 }, false);
+    assert.match(value, /`src\/a\.txt:12`/);
+    assert.doesNotMatch(value, /outside the diff/);
+  });
+
   test("a resolved finding says so", () => {
-    assert.match(issueTooltip({ ...FINDING, status: "resolved" }).value, /resolved/);
+    assert.match(issueTooltip({ ...FINDING, status: "resolved" }, false).value, /resolved/);
   });
 
   test("html in a note is escaped, not rendered", () => {
-    assert.match(issueTooltip({ ...FINDING, note: "<img src=x>" }).value, /&lt;img src=x&gt;/);
+    assert.match(issueTooltip({ ...FINDING, note: "<img src=x>" }, false).value, /&lt;img src=x&gt;/);
   });
 
   test("nothing in a tooltip is clickable", () => {
     // The marker is a comment, not a link: no actions here, and no trust flag,
     // so a note that happens to contain a command URI cannot become one.
-    const { value, isTrusted } = issueTooltip(FINDING);
+    const { value, isTrusted } = issueTooltip(FINDING, false);
     assert.ok(!value.includes("](command:"));
     assert.notEqual(isTrusted, true);
   });

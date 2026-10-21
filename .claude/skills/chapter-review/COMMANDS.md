@@ -67,14 +67,19 @@ Both fire for one finding when its file was renamed *and* its chapter changed, a
 
 ### issue
 
-`chapter-review issue add --path P --severity S --note "…" [--confidence suspected|verified] [--chapter ch-N] [--hunk oldStart,oldLines,newStart,newLines] [--old-path P]` — record a finding.
+`chapter-review issue add --path P --severity S --note "…" [--line N] [--confidence suspected|verified] [--chapter ch-N] [--hunk oldStart,oldLines,newStart,newLines] [--old-path P]` — record a finding.
 The id is assigned for you and the owning chapter is inferred from `--path`.
 Ids are numbered per chapter (the schema's `id` gives the shape), which is what makes the number quotable off the extension's tree, where a chapter row reads `2 · <title>` and its findings `2.1`, `2.2`.
-When the path lives in **one** chapter that's unambiguous; when it spans **several** (a hunk-split file), pass `--hunk` to select the chapter that owns that range, or `--chapter` to name it outright, otherwise the command picks the first owner and warns you to disambiguate.
+`--line` is the line of the file at the reviewed commit that the finding is about, and the extension opens the finding there.
+In the diff it also pins the finding to the claimed range holding that line, which picks the owning chapter, so a finding about specific code needs `--line` and nothing else; given with `--hunk`, the line must lie inside that range.
+A line no claimed range holds (an unchanged line of a changed file, or any line of a file claimed whole) is kept without a range.
+On `write` the line moves with the code around it, and an open finding whose own line changed is listed, since the change may be the fix: "edited since" with the old and the new line, or "removed" with where the gap is, in which case a finding in the diff loses the line and anchors to its range, or to the whole file when it has none.
+When the path lives in **one** chapter that's unambiguous; when it spans **several** (a hunk-split file), pass `--line` or `--hunk` to select the chapter that owns that part, or `--chapter` to name it outright, otherwise the command picks the first owner and warns you to disambiguate.
 `--hunk` does two jobs and the warning only mentions the first: it picks the owning chapter *and* it is what pins the finding to that range.
-Omit it and the finding anchors to the whole file, so a finding about one hunk needs `--hunk` even when `--chapter` has already settled ownership.
-This second job works on a file claimed whole too: the partition enumerates no ranges there, but the file still has `@@` hunks, and pinning to one is what keeps two findings about different parts of the same file from showing the same location in `issue list`.
-`issue list` prints the range each finding carries, so you can see which of the two you got.
+Omit both `--line` and `--hunk` and the finding anchors to the whole file.
+This second job works on a file claimed whole too: the partition enumerates no ranges there, but the file still has `@@` hunks, and one of them can anchor a finding about that whole range.
+Two findings about different lines of one file need no `--hunk` to tell them apart: their lines already do.
+`issue list` prints the line and the range each finding carries, so you can see which you got; a finding with no range shows none.
 A finding defaults to `confidence: suspected`; see SKILL.md step 7.
 `--path` must name a path the manifest holds, in a chapter or in `unassigned`, unless it comes with `--line` (see [Findings outside the diff](#findings-outside-the-diff)); a path in neither place is refused, because without a line it anchors to nothing the reviewer can open.
 Findings anchor to **chapters only**: `--chapter` takes `ch-<number>`, never `unassigned`.
@@ -88,15 +93,15 @@ The command warns when you do it anyway (the path is quarantined, so the finding
 #### Findings outside the diff
 
 `chapter-review issue add --path P --line N [--cause-path P [--cause-hunk oldStart,oldLines,newStart,newLines]] --severity S --note "…"` — record a finding on a file the branch left wrong without changing it: a stale doc, a config, a caller it forgot.
-`--line` is what marks the finding as outside the diff, and it is a 1-based line of the file at the reviewed commit (`headSha`), so copy it from `git show HEAD:<path>`.
-The file must exist there and the branch must not change it; a file in the diff anchors with `--hunk` or whole as usual, and `--line` with `--hunk` or `--old-path` is refused, since both of those describe a change.
+`--line` is a 1-based line of the file at the reviewed commit (`headSha`), so copy it from `git show HEAD:<path>`.
+A path no chapter or unassigned entry holds is what marks the finding as outside the diff, and such a finding needs `--line`; the file must exist at that commit, and `--hunk` or `--old-path` is refused there, since both describe a change.
 `--cause-path` names the file in the diff whose change left this one wrong, and `--cause-hunk` the range of it, chosen exactly as `--hunk` would be.
 The finding is filed under the chapter that owns the cause, so the reviewer meets it while reading the change that broke it; `--chapter` only chooses among the cause's owners.
 Without a cause the finding has no chapter and counts in the chapter-0 sequence, so name one whenever the change behind it is in the diff.
 `issue list` prints such a finding as `doc.md:3 (ch-2, outside the diff, caused by b.txt)`.
 
 On `write`, a finding outside the diff is kept while its file exists at the new head and the branch still leaves it alone, and its chapter is read back off the cause, renumbering it like any other finding that changes chapter.
-Once the branch changes the file (the author fixed the doc, say), the finding becomes an ordinary one on it, anchored to the whole file, and `write` lists it under "outside the diff on a file the branch now changes": read the change, then `issue resolve` it or `issue set <id> --hunk` onto the range it is about.
+Once the branch changes the file (the author fixed the doc, say), the finding becomes an ordinary one on it, keeping its line, and `write` lists it under "outside the diff on a file the branch now changes": read the change, then `issue resolve` it or `issue set <id> --line` onto the line it is about.
 A cause that leaves the diff is dropped and reported as `lost its cause`, leaving the finding with no chapter.
 
 `chapter-review issue set <id> [flags]` / `resolve <id>` / `reopen <id>` / `verify <id>` / `unverify <id>` / `rm <id>` / `list` — revise findings in place.

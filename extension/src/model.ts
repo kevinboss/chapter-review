@@ -48,7 +48,8 @@ export interface Cause {
 
 /**
  * A review finding the skill recorded. Grouped by chapterId, anchored to
- * path(+hunk), or to path and line for a file the branch does not change.
+ * path(+hunk), with `line` (at headSha) naming the exact line it is about. A file
+ * the branch does not change is anchored by path and line alone.
  */
 export interface Issue {
   id: string;
@@ -184,4 +185,16 @@ export function entryKeys(entry: FileEntry | UnassignedEntry): string[] {
 
 export function allEntries(m: Manifest): (FileEntry | UnassignedEntry)[] {
   return [...m.chapters.flatMap((c) => c.files), ...m.unassigned];
+}
+
+/** A finding on a file the branch does not change: no entry holds its path. */
+export function isOutsideDiff(m: Manifest, issue: Issue): boolean {
+  return issue.line !== undefined && !allEntries(m).some((e) => e.path === issue.path);
+}
+
+/** Every range the diff has for `path`, across all the entries splitting it. */
+export function fileHunks(m: Manifest, path: string): Hunk[] {
+  return allEntries(m)
+    .filter((e) => e.path === path)
+    .flatMap((e) => e.hunks ?? []);
 }

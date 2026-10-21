@@ -127,7 +127,8 @@ const ISSUE_FIELDS = {
   line: {
     type: "integer",
     minimum: 1,
-    description: "For a `path` outside the diff: the line at the reviewed commit. Never with `hunk`.",
+    description:
+      "The line the finding is about, in `path` at the reviewed commit; the extension opens the finding there. Required for a `path` outside the diff. In the diff it also picks the range, so `hunk` can be left out.",
   },
   cause: {
     type: "object",

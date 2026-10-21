@@ -42,8 +42,8 @@ export interface Issue {
   oldPath?: string;
   hunk?: Hunk;
   /**
-   * 1-based line in the file at headSha, for a finding on a file the branch does
-   * not change. Present exactly when the finding sits outside the diff.
+   * 1-based line in the file at headSha: the line the finding is about, in the
+   * diff or not. A finding on a file the branch does not change always has one.
    */
   line?: number;
   /** For a finding outside the diff: the change responsible, which picks its chapter. */
@@ -54,6 +54,15 @@ export interface Issue {
   confidence?: Confidence;
   status?: IssueStatus;
   createdAt?: string;
+}
+
+/**
+ * Where a line of the old file sits in the new one, and what happened to the
+ * line itself: replaced by other lines, or removed with nothing in its place.
+ */
+export interface MovedLine {
+  line: number;
+  change?: "edited" | "removed";
 }
 
 export interface ReviewedUnit {

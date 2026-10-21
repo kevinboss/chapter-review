@@ -26,14 +26,12 @@ const SEVERITY_BACKGROUND: Record<IssueSeverity, string> = {
 };
 
 /**
- * Finding row: severity, id, the full note, and the path the row omits. A finding
- * outside the diff adds its line and the change that caused it.
+ * Finding row: severity, id, the full note, and the path the row omits, with its
+ * line when it has one. A finding outside the diff adds the change that caused it.
  */
-export function issueTooltip(issue: Issue): vscode.MarkdownString {
-  const where =
-    issue.line === undefined
-      ? `\`${escapeHtml(issue.path)}\``
-      : `\`${escapeHtml(`${issue.path}:${String(issue.line)}`)}\` · outside the diff`;
+export function issueTooltip(issue: Issue, outside: boolean): vscode.MarkdownString {
+  const at = issue.line === undefined ? issue.path : `${issue.path}:${String(issue.line)}`;
+  const where = `\`${escapeHtml(at)}\`${outside ? " · outside the diff" : ""}`;
   const cause = issue.cause && `caused by \`${escapeHtml(issue.cause.path)}\``;
   return tooltip([header(issue), escapeHtml(issue.note), where, cause]);
 }
