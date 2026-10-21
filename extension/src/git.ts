@@ -58,6 +58,34 @@ export function gitDirtyCount(repoRoot: string): Promise<number | undefined> {
   });
 }
 
+// Where the CLI pins the commits each round's diff is read from, per worktree.
+const PIN_PREFIX = "refs/worktree/chapter-review/";
+
+/**
+ * Drop every pin the CLI made for this worktree's review, so a discarded review
+ * leaves nothing behind for gc to keep. Failures are swallowed: an unreleased
+ * pin keeps a commit alive, it breaks nothing.
+ */
+export function releasePins(repoRoot: string): Promise<void> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      ["for-each-ref", "--format=delete %(refname)", PIN_PREFIX],
+      { cwd: repoRoot },
+      (err, stdout) => {
+        if (err || stdout.trim() === "") {
+          resolve();
+          return;
+        }
+        const child = execFile("git", ["update-ref", "--stdin"], { cwd: repoRoot }, () => {
+          resolve();
+        });
+        child.stdin?.end(stdout);
+      }
+    );
+  });
+}
+
 /** `git merge-base <a> <b>` → SHA, or undefined if there is no common ancestor. */
 export function gitMergeBase(
   repoRoot: string,

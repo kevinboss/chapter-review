@@ -9,6 +9,7 @@ const FOCUS_DIR = "chapter-review";
 const FOCUS_PATH = "chapter-review/focus.json";
 
 export interface Focus {
+  round?: number;
   path?: string;
   line?: number;
   chapterId?: string;
@@ -22,6 +23,8 @@ export interface Focus {
  * resolveFocus).
  */
 export interface FocusAnchor {
+  /** The round whose manifest the rest is read against. */
+  round?: number;
   path?: string;
   oldPath?: string;
   hunk?: Hunk;
@@ -69,6 +72,7 @@ export function focusForNode(node: Node): FocusAnchor | undefined {
   switch (node.kind) {
     case "file":
       return {
+        round: node.round,
         path: node.entry.path,
         oldPath: node.entry.oldPath,
         hunk: node.entry.hunks?.[0],
@@ -76,6 +80,7 @@ export function focusForNode(node: Node): FocusAnchor | undefined {
       };
     case "hunk":
       return {
+        round: node.round,
         path: node.entry.path,
         oldPath: node.entry.oldPath,
         hunk: node.hunk,
@@ -83,6 +88,7 @@ export function focusForNode(node: Node): FocusAnchor | undefined {
       };
     case "issue":
       return {
+        round: node.issue.round,
         path: node.issue.path,
         oldPath: node.issue.oldPath,
         hunk: node.issue.hunk,
@@ -91,7 +97,9 @@ export function focusForNode(node: Node): FocusAnchor | undefined {
         issueId: node.issue.id,
       };
     case "chapter":
-      return { chapterId: node.chapter.id };
+      return { round: node.round, chapterId: node.chapter.id };
+    case "round":
+      return { round: node.round };
     default:
       return undefined;
   }
@@ -101,14 +109,15 @@ export function focusForNode(node: Node): FocusAnchor | undefined {
  * The pointer to write for an anchor: its hunk becomes the line where the change
  * actually lands. The skill quotes this line back as the place a finding is
  * about, so handing it newStart named a context line up to three above the code.
- * Without a manifest to resolve against, the hunk's own start is all there is.
+ * `m` is the manifest of the anchor's round; without one, the hunk's own start
+ * is all there is.
  */
 export async function resolveFocus(
   repoRoot: string,
   m: Manifest | undefined,
   anchor: FocusAnchor
 ): Promise<Focus> {
-  const { path, hunk, chapterId, issueId } = anchor;
+  const { round, path, hunk, chapterId, issueId } = anchor;
   const line =
     anchor.line ??
     (hunk === undefined || path === undefined
@@ -116,5 +125,5 @@ export async function resolveFocus(
       : m === undefined
         ? hunk.newStart
         : await changeLineFor(repoRoot, m, { path, oldPath: anchor.oldPath }, hunk));
-  return { path, line, chapterId, issueId };
+  return { round, path, line, chapterId, issueId };
 }

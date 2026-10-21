@@ -43,8 +43,8 @@ export async function changeLineFor(
   h: Hunk
 ): Promise<number> {
   const [oldText, newText] = await Promise.all([
-    gitShow(repoRoot, m.mergeBase, target.oldPath ?? target.path),
-    gitShow(repoRoot, m.headSha ?? m.head, target.path),
+    gitShow(repoRoot, m.fromSha, target.oldPath ?? target.path),
+    gitShow(repoRoot, m.headSha, target.path),
   ]);
   return changeLineIn(oldText, newText, h);
 }

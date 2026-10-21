@@ -132,6 +132,12 @@
         "title": "Open File",
         "category": "Chapter Review",
         "icon": "$(go-to-file)"
+      },
+      {
+        "command": "chapterReview.openBranchDiff",
+        "title": "Open Whole-Branch Diff",
+        "category": "Chapter Review",
+        "icon": "$(git-compare)"
       }
     ],
     "menus": {
@@ -168,6 +174,13 @@
           "when": "view == chapterReview && chapterReview.skillStatus == present"
         }
       ],
+      "view/item/context": [
+        {
+          "command": "chapterReview.openBranchDiff",
+          "when": "view == chapterReview && viewItem == laterRoundFile",
+          "group": "inline"
+        }
+      ],
       "editor/title": [
         {
           "command": "chapterReview.openFile",
@@ -186,6 +199,10 @@
         },
         {
           "command": "chapterReview.openFile",
+          "when": "false"
+        },
+        {
+          "command": "chapterReview.openBranchDiff",
           "when": "false"
         },
         {

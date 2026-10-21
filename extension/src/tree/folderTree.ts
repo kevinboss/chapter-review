@@ -1,7 +1,7 @@
 import { FileNode, FolderNode, Node } from "./nodes";
 
 /** Nested folders per chapter, single-child chains compressed ("src/auth"). */
-export function buildFolderTree(ownerId: string, files: FileNode[]): Node[] {
+export function buildFolderTree(round: number, ownerId: string, files: FileNode[]): Node[] {
   interface Dir {
     dirs: Map<string, Dir>;
     files: FileNode[];
@@ -36,6 +36,7 @@ export function buildFolderTree(ownerId: string, files: FileNode[]): Node[] {
       const { label, dir: current } = compress(sub, prefix + name);
       nodes.push({
         kind: "folder",
+        round,
         ownerId,
         label,
         children: emit(current, ""),

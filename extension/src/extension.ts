@@ -11,13 +11,14 @@ import {
   resolveGitDir,
   reviewUriPath,
 } from "./gitContent";
-import { computeDigests, type UnitDigest } from "./fingerprint";
+import { computeDigests } from "./fingerprint";
+import { releasePins } from "./git";
 import { isOpen, Manifest, parseManifest, ReviewedUnit } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
 import { checkStaleness } from "./staleness";
 import { errorMessage } from "./util";
-import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, ViewMode } from "./tree";
+import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, RoundView, ViewMode } from "./tree";
 
 // Relative to the repo's git dir: tool state lives inside .git, invisible to
 // git status and impossible to commit by accident.
@@ -33,6 +34,12 @@ const HAS_MANIFEST_KEY = "chapterReview.hasManifest";
 
 // Fingerprint of manifest bytes, so the extension can recognize its own writes.
 const sha = (data: Uint8Array): string => createHash("sha256").update(data).digest("hex");
+
+/** A round as the host holds it: what the tree reads, and where its ticks go. */
+interface HostRound extends RoundView {
+  progress: ReviewProgress;
+  progressUri: vscode.Uri;
+}
 
 /** progress.json as the extension expects to find it. */
 function hasReviewedArray(doc: unknown): doc is { reviewed: ReviewedUnit[] } {
@@ -67,17 +74,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const protocolUri = vscode.Uri.joinPath(gitDirUri, PROTOCOL_DIR);
   const manifestUri = vscode.Uri.joinPath(gitDirUri, MANIFEST_PATH);
   const progressUri = vscode.Uri.joinPath(gitDirUri, PROGRESS_PATH);
+  // Earlier rounds, kept by the CLI under rounds/<n>/.
+  const roundUri = (round: number, file: string): vscode.Uri =>
+    vscode.Uri.joinPath(protocolUri, "rounds", String(round), file);
 
   // Hash of the last content we wrote, so the watcher can skip our own writes.
-  // A container because these are reassigned from the closures below.
-  const lastWritten: { manifest?: string; progress?: string } = {};
+  // A container because the manifest's is reassigned from the closures below;
+  // checkmarks are keyed by the document's URI, one per round.
+  const lastWritten: { manifest?: string; progress: Map<string, string> } = { progress: new Map() };
 
-  const progress = new ReviewProgress();
   const focus = new FocusStore(gitDirUri);
   const patchedDocs = new PatchedContentProvider();
 
   const viewMode = context.workspaceState.get<ViewMode>(VIEW_MODE_KEY, "tree");
-  const provider = new ChapterTreeProvider(folderUri, progress, undefined, viewMode);
+  const provider = new ChapterTreeProvider(folderUri, viewMode);
+  // The rounds as the host holds them: what the tree reads, plus where each
+  // round's checkmarks are written.
+  const state: { rounds: HostRound[] } = { rounds: [] };
+  const roundOf = (n: number | undefined): HostRound | undefined =>
+    state.rounds.find((r) => r.manifest.round === n);
   void vscode.commands.executeCommand("setContext", VIEW_MODE_KEY, viewMode);
 
   const view = vscode.window.createTreeView("chapterReview", {
@@ -89,7 +104,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     manageCheckboxStateManually: true,
   });
 
-  const diffViewer = new DiffViewer(folderUri, patchedDocs, () => provider.manifest);
+  const diffViewer = new DiffViewer(folderUri, patchedDocs, (n) => provider.roundView(n)?.manifest);
 
   function updateSummary(): void {
     const m = provider.manifest;
@@ -107,39 +122,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function reload(): Promise<void> {
+    const current = await readManifest(manifestUri, true);
+    const earlier: Manifest[] = [];
+    for (const n of current ? Array.from({ length: current.round - 1 }, (_, i) => i + 1) : []) {
+      const m = await readManifest(roundUri(n, "chapters.json"), false);
+      if (m) earlier.push(m);
+    }
+    state.rounds = await Promise.all(
+      [...earlier, ...(current ? [current] : [])].map((m) =>
+        loadRound(m, m === current ? progressUri : roundUri(m.round, "progress.json"))
+      )
+    );
+    provider.rounds = state.rounds;
+    await refreshStaleness();
+  }
+
+  /** A manifest, or undefined when it is absent or unreadable; only the current one's errors are shown. */
+  async function readManifest(uri: vscode.Uri, report: boolean): Promise<Manifest | undefined> {
     try {
-      const bytes = await vscode.workspace.fs.readFile(manifestUri);
-      provider.manifest = parseManifest(Buffer.from(bytes).toString("utf8"));
+      return parseManifest(Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8"));
     } catch (e) {
-      provider.manifest = undefined;
-      if (!(e instanceof vscode.FileSystemError)) {
+      if (report && !(e instanceof vscode.FileSystemError)) {
         void vscode.window.showErrorMessage(`Chapter Review: ${errorMessage(e)}`);
       }
+      return undefined;
     }
-    progress.load(await readProgressUnits());
-    await refreshDigests();
-    await refreshStaleness();
   }
 
   // Fingerprints the reviewed content of each unit so checkmarks track content,
   // not hunk coordinates: a regenerated chapter drops the check on units whose
-  // content moved. Recomputed only here (on manifest change), since digests are
-  // a pure function of the manifest's pinned commits.
-  async function refreshDigests(): Promise<void> {
-    provider.digests = provider.manifest
-      ? await computeDigests(folderUri.fsPath, provider.manifest)
-      : new Map<string, UnitDigest>();
+  // content moved. Recomputed only on load, since digests are a pure function of
+  // the round's pinned commits.
+  async function loadRound(manifest: Manifest, uri: vscode.Uri): Promise<HostRound> {
+    const progress = new ReviewProgress();
+    progress.load(await readProgressUnits(uri));
+    const round: HostRound = {
+      manifest,
+      progress,
+      digests: await computeDigests(folderUri.fsPath, manifest),
+      progressUri: uri,
+    };
     // Persisted when it moved something: the next tick serializes only the units
     // this manifest declares, which would drop the adopted marks again.
-    if (progress.adoptWholeFileMarks(provider.digests)) {
-      await persistProgress();
+    if (progress.adoptWholeFileMarks(round.digests)) {
+      await writeProgress(round);
     }
+    return round;
   }
 
-  /** Checkmarks from progress.json; undefined when it is absent or unreadable. */
-  async function readProgressUnits(): Promise<ReviewedUnit[] | undefined> {
+  /** Checkmarks from a progress document; undefined when it is absent or unreadable. */
+  async function readProgressUnits(uri: vscode.Uri): Promise<ReviewedUnit[] | undefined> {
     try {
-      const bytes = await vscode.workspace.fs.readFile(progressUri);
+      const bytes = await vscode.workspace.fs.readFile(uri);
       const doc: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
       return hasReviewedArray(doc) ? doc.reviewed : undefined;
     } catch {
@@ -155,23 +189,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   /**
-   * Persist the checked set to progress.json and repaint from memory (only
-   * checkmarks changed, so no reload or digest recompute).
+   * Persist a round's checked set to its progress document.
    *
    * Written via a temp file and rename: the CLI reads this document, and an
    * in-place write can hand it a truncated file.
    */
-  async function persistProgress(): Promise<void> {
-    const m = provider.manifest;
-    if (!m) {
-      return;
-    }
-    const doc = { version: 1, reviewed: progress.toReviewedUnits(m) };
+  async function writeProgress(round: HostRound): Promise<void> {
+    const doc = { version: 1, reviewed: round.progress.toReviewedUnits(round.manifest) };
     const buf = Buffer.from(JSON.stringify(doc, null, 2) + "\n", "utf8");
-    lastWritten.progress = sha(buf);
-    const tmp = vscode.Uri.joinPath(gitDirUri, `${PROGRESS_PATH}.${process.pid}.tmp`);
+    lastWritten.progress.set(round.progressUri.toString(), sha(buf));
+    const tmp = vscode.Uri.joinPath(round.progressUri, `../progress.json.${process.pid}.tmp`);
     await vscode.workspace.fs.writeFile(tmp, buf);
-    await vscode.workspace.fs.rename(tmp, progressUri, { overwrite: true });
+    await vscode.workspace.fs.rename(tmp, round.progressUri, { overwrite: true });
+  }
+
+  /** Persist the rounds whose checkmarks changed, then repaint from memory. */
+  async function persistProgress(rounds: HostRound[]): Promise<void> {
+    for (const round of rounds) {
+      await writeProgress(round);
+    }
     provider.refresh();
     updateSummary();
   }
@@ -233,7 +269,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   async function writeFocus(node: Node): Promise<void> {
     const anchor = focusForNode(node);
     if (anchor) {
-      await focus.write(await resolveFocus(folderUri.fsPath, provider.manifest, anchor));
+      const m = anchor.round === undefined ? provider.manifest : provider.roundView(anchor.round)?.manifest;
+      await focus.write(await resolveFocus(folderUri.fsPath, m, anchor));
     }
   }
 
@@ -294,6 +331,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       return;
     }
+    await releasePins(folderUri.fsPath);
     // Repainted from here rather than through the watcher: a file removed along
     // with its parent directory does not reliably raise onDidDelete.
     await reload();
@@ -308,22 +346,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(PATCHED_SCHEME, patchedDocs),
     view.onDidChangeCheckboxState(async (e) => {
       const issueUpdates: { id: string; resolved: boolean }[] = [];
-      const progressNodes = [...e.items].filter(([node, state]) => {
-        const checked = state === vscode.TreeItemCheckboxState.Checked;
+      // A tick lands in the round its node belongs to; each round touched is
+      // written once.
+      const ticked = new Set<HostRound>();
+      for (const [node, checkState] of e.items) {
+        const checked = checkState === vscode.TreeItemCheckboxState.Checked;
         if (node.kind === "issue") {
           issueUpdates.push({ id: node.issue.id, resolved: checked });
-          return false;
+          continue;
         }
-        progress.setReviewed(provider.reviewUnitsFor(node), checked);
-        return true;
-      });
-      const progressChanged = progressNodes.length > 0;
+        const round = roundOf(provider.roundOf(node));
+        if (round) {
+          round.progress.setReviewed(provider.reviewUnitsFor(node), checked);
+          ticked.add(round);
+        }
+      }
       if (issueUpdates.length > 0) {
         await setIssuesResolved(issueUpdates);
       }
       // persistProgress repaints; if only issues changed, repaint here instead.
-      if (progressChanged) {
-        await persistProgress();
+      if (ticked.size > 0) {
+        await persistProgress([...ticked]);
       } else {
         provider.refresh();
         updateSummary();
@@ -341,61 +384,73 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("chapterReview.openDiff", (node: FileNode | HunkNode) =>
       diffViewer.openDiff(node)
     ),
+    vscode.commands.registerCommand("chapterReview.openBranchDiff", (node: FileNode) =>
+      diffViewer.openBranchDiff(node)
+    ),
     vscode.commands.registerCommand("chapterReview.openFile", openFile),
     vscode.commands.registerCommand("chapterReview.openIssue", openIssue),
     vscode.commands.registerCommand("chapterReview.resetProgress", async () => {
-      progress.clear();
-      await persistProgress();
+      for (const round of state.rounds) {
+        round.progress.clear();
+      }
+      await persistProgress(state.rounds);
     }),
     vscode.commands.registerCommand("chapterReview.clearReview", clearReview)
   );
 
   // Skip reloads caused by our own writes; a CLI write differs and still reloads.
-  async function onManifestWritten(): Promise<void> {
-    try {
-      const bytes = await vscode.workspace.fs.readFile(manifestUri);
-      if (sha(bytes) === lastWritten.manifest) {
-        return;
+  // An earlier round's manifest is the CLI's alone, so any change to one reloads.
+  async function onManifestWritten(uri: vscode.Uri): Promise<void> {
+    if (uri.toString() === manifestUri.toString()) {
+      try {
+        const bytes = await vscode.workspace.fs.readFile(manifestUri);
+        if (sha(bytes) === lastWritten.manifest) {
+          return;
+        }
+      } catch {
+        // Fall through: reload() handles a missing or unreadable manifest.
       }
-    } catch {
-      // Fall through: reload() handles a missing or unreadable manifest.
     }
     await reload();
   }
 
   // Base the watcher on the git dir, which may sit outside the workspace
   // folder (worktrees); RelativePattern with a Uri base handles that.
-  // progress.json is written by this extension and by `chapter-review uncheck`,
-  // so an external change has to repaint the checkmarks. Cheaper than the
-  // manifest path: only the checked set changed, so no reload or digest work.
-  async function onProgressWritten(): Promise<void> {
+  // Checkmarks are written by this extension and by `chapter-review uncheck`,
+  // so an external change has to repaint them. Cheaper than the manifest path:
+  // only that round's checked set changed, so no reload or digest work.
+  async function onProgressWritten(uri: vscode.Uri): Promise<void> {
+    const round = state.rounds.find((r) => r.progressUri.toString() === uri.toString());
+    if (!round) {
+      return; // a round not loaded yet; the manifest watcher reloads it whole
+    }
     try {
-      const bytes = await vscode.workspace.fs.readFile(progressUri);
-      if (sha(Buffer.from(bytes)) === lastWritten.progress) {
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      if (sha(Buffer.from(bytes)) === lastWritten.progress.get(uri.toString())) {
         return; // our own write
       }
     } catch {
       /* deleted: fall through and repaint as empty */
     }
-    progress.load(await readProgressUnits());
+    round.progress.load(await readProgressUnits(uri));
     provider.refresh();
     updateSummary();
   }
 
   const progressWatcher = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(gitDirUri, PROGRESS_PATH)
+    new vscode.RelativePattern(gitDirUri, `${PROTOCOL_DIR}/{progress.json,rounds/*/progress.json}`)
   );
-  progressWatcher.onDidCreate(() => void onProgressWritten());
-  progressWatcher.onDidChange(() => void onProgressWritten());
-  progressWatcher.onDidDelete(() => void onProgressWritten());
+  progressWatcher.onDidCreate((uri) => void onProgressWritten(uri));
+  progressWatcher.onDidChange((uri) => void onProgressWritten(uri));
+  progressWatcher.onDidDelete((uri) => void onProgressWritten(uri));
   context.subscriptions.push(progressWatcher);
 
   const watcher = vscode.workspace.createFileSystemWatcher(
-    new vscode.RelativePattern(gitDirUri, MANIFEST_PATH)
+    new vscode.RelativePattern(gitDirUri, `${PROTOCOL_DIR}/{chapters.json,rounds/*/chapters.json}`)
   );
-  watcher.onDidCreate(onManifestWritten);
-  watcher.onDidChange(onManifestWritten);
-  watcher.onDidDelete(reload);
+  watcher.onDidCreate((uri) => void onManifestWritten(uri));
+  watcher.onDidChange((uri) => void onManifestWritten(uri));
+  watcher.onDidDelete(() => void reload());
   context.subscriptions.push(watcher);
 
   // Live staleness: a commit, amend, rebase or checkout in the terminal moves

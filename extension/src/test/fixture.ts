@@ -63,6 +63,8 @@ export function makeFixture(): Fixture {
     head: "feat",
     mergeBase,
     headSha,
+    round: 1,
+    fromSha: mergeBase,
     generatedAt: "2026-07-27T10:00:00Z",
     chapters: [
       {

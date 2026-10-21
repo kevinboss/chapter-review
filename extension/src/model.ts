@@ -49,10 +49,12 @@ export interface Cause {
 /**
  * A review finding the skill recorded. Grouped by chapterId, anchored to
  * path(+hunk), with `line` (at headSha) naming the exact line it is about. A file
- * the branch does not change is anchored by path and line alone.
+ * the branch does not change is anchored by path and line alone. All of it is
+ * read against the manifest of the finding's `round`.
  */
 export interface Issue {
   id: string;
+  round: number;
   path: string;
   oldPath?: string;
   hunk?: Hunk;
@@ -79,10 +81,16 @@ export interface ReviewedUnit {
 
 export interface Manifest {
   version: 1;
+  /** 1 for the first review of the branch; each write after the head moved adds one. */
+  round: number;
   base: string;
   head: string;
   mergeBase: string;
-  headSha?: string;
+  /** Left side of this round's diff: mergeBase in round 1, the previous round's head after. */
+  fromSha: string;
+  headSha: string;
+  /** Files whose round diff also shows what a moved base changed. */
+  replayConflicts?: string[];
   generatedAt: string;
   summary?: string;
   chapters: Chapter[];
@@ -136,6 +144,13 @@ function hasManifestShape(m: Record<string, unknown>): m is Manifest & Record<st
     Array.isArray(m.unassigned) &&
     typeof m.mergeBase === "string" &&
     m.mergeBase.length > 0 &&
+    typeof m.fromSha === "string" &&
+    m.fromSha.length > 0 &&
+    typeof m.headSha === "string" &&
+    m.headSha.length > 0 &&
+    typeof m.round === "number" &&
+    Number.isSafeInteger(m.round) &&
+    m.round >= 1 &&
     typeof m.base === "string" &&
     m.base.length > 0 &&
     typeof m.head === "string" &&
@@ -156,11 +171,13 @@ export function parseManifest(text: string): Manifest {
   if (!Array.isArray(m.chapters) || !Array.isArray(m.unassigned)) {
     throw new Error("chapters.json: chapters/unassigned must be arrays");
   }
-  if (!m.mergeBase || !m.base || !m.head) {
-    throw new Error("chapters.json: base, head and mergeBase are required");
+  if (!m.mergeBase || !m.fromSha || !m.headSha || !m.base || !m.head || !m.round) {
+    throw new Error("chapters.json: round, base, head, mergeBase, fromSha and headSha are required");
   }
   if (!hasManifestShape(m)) {
-    throw new Error("chapters.json: base, head and mergeBase must be strings");
+    throw new Error(
+      "chapters.json: round must be a number from 1, and base, head, mergeBase, fromSha and headSha strings"
+    );
   }
   return m;
 }

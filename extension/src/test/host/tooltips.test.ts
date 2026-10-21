@@ -20,6 +20,7 @@ const KEPT_OPEN = /(\]\(|<\/a>)/;
 
 const FINDING: Issue = {
   id: "iss-1.1",
+  round: 1,
   path: "src/a.txt",
   chapterId: "ch-1",
   severity: "critical",

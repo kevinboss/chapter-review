@@ -31,8 +31,7 @@ function sameCommit(a: string, b: string): boolean {
  *
  * Conservative by design: when a git query can't run (detached HEAD, a base ref
  * that no longer exists, git absent) that signal is skipped rather than
- * reported as stale, so the warning never fires on a false positive. A manifest
- * without headSha degrades to the merge-base check alone.
+ * reported as stale, so the warning never fires on a false positive.
  */
 export async function checkStaleness(repoRoot: string, manifest: Manifest): Promise<Staleness> {
   const liveHead = await gitRevParse(repoRoot, "HEAD");
@@ -40,8 +39,7 @@ export async function checkStaleness(repoRoot: string, manifest: Manifest): Prom
   const count = await gitDirtyCount(repoRoot);
   const dirty = count !== undefined && count > 0 ? { dirty: count } : {};
 
-  const headMoved =
-    !!manifest.headSha && !!liveHead && !sameCommit(manifest.headSha, liveHead);
+  const headMoved = !!liveHead && !sameCommit(manifest.headSha, liveHead);
   const baseMoved = !!liveMergeBase && !sameCommit(manifest.mergeBase, liveMergeBase);
 
   if (!headMoved && !baseMoved) {

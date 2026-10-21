@@ -41,7 +41,7 @@ suite("diff viewer", () => {
   test("a hunk-split entry opens against a chapter-scoped right-hand side", () =>
     withFixture(async (fx) => {
       const entry = fx.manifest.chapters[0].files[0];
-      await viewerFor(fx, fx.manifest).openDiff({ kind: "file", ownerId: "ch-1", entry });
+      await viewerFor(fx, fx.manifest).openDiff({ kind: "file", round: 1, ownerId: "ch-1", entry });
 
       const { left, right } = activeTab();
       assert.equal(left?.scheme, GIT_SCHEME, "the left side is merge-base content");
@@ -54,7 +54,7 @@ suite("diff viewer", () => {
     withFixture(async (fx) => {
       const entry = fx.manifest.chapters[1].files[1];
       assert.equal(entry.path, "b.txt");
-      await viewerFor(fx, fx.manifest).openDiff({ kind: "file", ownerId: "ch-2", entry });
+      await viewerFor(fx, fx.manifest).openDiff({ kind: "file", round: 1, ownerId: "ch-2", entry });
 
       const { left, right } = activeTab();
       assert.equal(left?.scheme, GIT_SCHEME);
@@ -68,7 +68,7 @@ suite("diff viewer", () => {
         ...fx.manifest,
         chapters: [{ id: "ch-1", title: "adds", files: [added] }],
       };
-      await viewerFor(fx, manifest).openDiff({ kind: "file", ownerId: "ch-1", entry: added });
+      await viewerFor(fx, manifest).openDiff({ kind: "file", round: 1, ownerId: "ch-1", entry: added });
 
       const { left } = activeTab();
       // An empty ref is what gitContent serves as "".  Mislabelling a modified
@@ -84,7 +84,7 @@ suite("diff viewer", () => {
         ...fx.manifest,
         chapters: [{ id: "ch-1", title: "removes", files: [deleted] }],
       };
-      await viewerFor(fx, manifest).openDiff({ kind: "file", ownerId: "ch-1", entry: deleted });
+      await viewerFor(fx, manifest).openDiff({ kind: "file", round: 1, ownerId: "ch-1", entry: deleted });
 
       const { right } = activeTab();
       assert.match(right?.query ?? "", /"ref":""/);
@@ -97,7 +97,7 @@ suite("diff viewer", () => {
         ...fx.manifest,
         chapters: [{ id: "ch-1", title: "renames", files: [renamed] }],
       };
-      await viewerFor(fx, manifest).openDiff({ kind: "file", ownerId: "ch-1", entry: renamed });
+      await viewerFor(fx, manifest).openDiff({ kind: "file", round: 1, ownerId: "ch-1", entry: renamed });
 
       const { left, right } = activeTab();
       assert.match(left?.query ?? "", /b\.txt/, "the before side is the pre-rename path");
@@ -122,6 +122,7 @@ suite("diff viewer", () => {
         kind: "issue",
         issue: {
           id: "iss-1.1",
+          round: 1,
           path: "a.txt",
           chapterId: "ch-1",
           severity: "low",
@@ -140,7 +141,7 @@ suite("diff viewer", () => {
       // No chapter owns this path, so there is no diff to scope it to.
       await viewerFor(fx, fx.manifest).openIssue({
         kind: "issue",
-        issue: { id: "iss-0.1", path: "a.txt", severity: "low", note: "orphan" },
+        issue: { id: "iss-0.1", round: 1, path: "a.txt", severity: "low", note: "orphan" },
       });
 
       const { single } = activeTab();
@@ -155,6 +156,7 @@ suite("diff viewer", () => {
         kind: "issue",
         issue: {
           id: "iss-2.1",
+          round: 1,
           path: "doc.md",
           line: 3,
           cause: { path: "b.txt" },
@@ -168,14 +170,14 @@ suite("diff viewer", () => {
       // serves the workspace's repo, not the fixture's, so this document is empty.
       const { single } = activeTab();
       assert.equal(single?.scheme, GIT_SCHEME, "the file as reviewed, neither a diff nor the working copy");
-      assert.equal(single.toString(), gitUri(fx.manifest.headSha ?? fx.manifest.head, "doc.md").toString());
+      assert.equal(single.toString(), gitUri(fx.manifest.headSha, "doc.md").toString());
     }));
 
   test("a finding in the diff with a line opens its chapter's diff", () =>
     withFixture(async (fx) => {
       await viewerFor(fx, fx.manifest).openIssue({
         kind: "issue",
-        issue: { id: "iss-2.1", path: "a.txt", line: 5, chapterId: "ch-2", severity: "low", note: "L5" },
+        issue: { id: "iss-2.1", round: 1, path: "a.txt", line: 5, chapterId: "ch-2", severity: "low", note: "L5" },
       });
 
       const { right } = activeTab();
@@ -187,12 +189,15 @@ suite("diff viewer", () => {
     assert.ok(ws, "the host tests run against a workspace");
     const git = (...a: string[]): string =>
       execFileSync("git", a, { cwd: ws.uri.fsPath, encoding: "utf8" }).trim();
+    const mergeBase = git("merge-base", "main", "HEAD");
     const manifest: Manifest = {
       version: 1,
       base: "main",
       head: "feat",
-      mergeBase: git("merge-base", "main", "HEAD"),
+      mergeBase,
       headSha: git("rev-parse", "HEAD"),
+      round: 1,
+      fromSha: mergeBase,
       generatedAt: "2026-10-21T10:00:00Z",
       chapters: [{ id: "ch-1", title: "edits a", files: [{ path: "a.txt", status: "modified" }] }],
       unassigned: [],
@@ -202,6 +207,7 @@ suite("diff viewer", () => {
       kind: "issue",
       issue: {
         id: "iss-1.1",
+        round: 1,
         path: "a.txt",
         line: 5,
         hunk: { oldStart: 1, oldLines: 6, newStart: 1, newLines: 6 },
@@ -226,13 +232,15 @@ suite("diff viewer", () => {
       head: "feat",
       mergeBase: headSha,
       headSha,
+      round: 1,
+      fromSha: headSha,
       generatedAt: "2026-10-19T10:00:00Z",
       chapters: [],
       unassigned: [],
     };
     await new DiffViewer(ws.uri, new PatchedContentProvider(), () => manifest).openIssue({
       kind: "issue",
-      issue: { id: "iss-0.1", path: "a.txt", line: 5, severity: "low", note: "stale" },
+      issue: { id: "iss-0.1", round: 1, path: "a.txt", line: 5, severity: "low", note: "stale" },
     });
 
     const editor = vscode.window.activeTextEditor;
@@ -248,6 +256,7 @@ suite("diff viewer", () => {
         kind: "issue",
         issue: {
           id: "iss-1.1",
+          round: 1,
           path: "a.txt",
           chapterId: "ch-1",
           severity: "low",
@@ -272,6 +281,7 @@ suite("focusHunkFor", () => {
   const entry: FileEntry = { path: "a.txt", status: "modified", hunks: [top, bottom] };
   const finding = (hunk?: Hunk): Issue => ({
     id: "iss-1.1",
+    round: 1,
     path: "a.txt",
     chapterId: "ch-1",
     severity: "low",
