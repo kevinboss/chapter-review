@@ -3,7 +3,7 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
 import { changeLineIn } from "../../changeLine";
-import { applyHunks } from "../../diffScope";
+import { applyHunks, scopedLine } from "../../diffScope";
 import { buildFolderTree } from "../../tree/folderTree";
 import type { FileNode, FolderNode, Node } from "../../tree/nodes";
 import type { Hunk } from "../../model";
@@ -58,6 +58,40 @@ describe("applyHunks", () => {
 
   it("no hunks yields the merge-base content untouched", () => {
     assert.equal(applyHunks(oldText, newText, []).text, oldText);
+  });
+});
+
+describe("scopedLine", () => {
+  // Line 2 replaced by two lines, line 5 deleted, a line inserted after line 7.
+  const oldText = "a\nb\nc\nd\ne\nf\ng\nh\n";
+  const newText = "a\nB1\nB2\nc\nd\nf\ng\nG\nh\n";
+  const top: Hunk = { oldStart: 2, oldLines: 1, newStart: 2, newLines: 2 };
+  const gone: Hunk = { oldStart: 5, oldLines: 1, newStart: 5, newLines: 0 };
+  const added: Hunk = { oldStart: 7, oldLines: 0, newStart: 8, newLines: 1 };
+  const all = [top, gone, added];
+  const newLines = newText.split("\n");
+
+  for (const applied of [[top], [gone], [added], [top, added], all]) {
+    const label = applied.map((h) => all.indexOf(h)).join("+");
+    it(`every line the patch holds lands on the same text (${label})`, () => {
+      const patched = applyHunks(oldText, newText, applied).text.split("\n");
+      for (const at of [...newLines.keys()].map((k) => k + 1)) {
+        const line = scopedLine(at, applied, all);
+        if (line !== undefined) {
+          assert.equal(patched[line - 1], newLines[at - 1], `head line ${at}`);
+        }
+      }
+    });
+  }
+
+  it("is undefined for a line another chapter's hunk owns", () => {
+    assert.equal(scopedLine(8, [top], all), undefined);
+    assert.equal(scopedLine(3, [added], all), undefined);
+  });
+
+  it("places a line of an applied hunk and an untouched line", () => {
+    assert.equal(scopedLine(3, [top, added], all), 3);
+    assert.equal(scopedLine(9, [top, added], all), 10);
   });
 });
 

@@ -125,10 +125,19 @@ const cases: Case[] = [
     expectError: null,
   },
   {
-    name: "issue with both a line and a hunk",
+    name: "issue in the diff with both a line and a hunk is valid",
+    mutate: (m) => {
+      m.issues[0].hunk = { oldStart: 1, oldLines: 2, newStart: 1, newLines: 3 };
+      m.issues[0].line = 2;
+    },
+    expectError: null,
+  },
+  {
+    name: "issue with a cause and a hunk",
     mutate: (m) => {
       m.issues[0].hunk = { oldStart: 1, oldLines: 2, newStart: 1, newLines: 3 };
       m.issues[0].line = 4;
+      m.issues[0].cause = { path: "docs/adr.md" };
     },
     expectError: "cannot carry a hunk or oldPath",
   },

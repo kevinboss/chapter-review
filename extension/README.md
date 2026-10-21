@@ -48,6 +48,7 @@ If the view says "No chapter manifest found", the skill hasn't generated one for
 - Chapter-scoped diffs: a file or hunk opens a diff showing only that chapter's changes, even when other chapters touch the same file. The cursor lands on the first changed line.
 - Review progress via native checkboxes on files and hunks, keyed by hunk position so it survives manifest regeneration for unchanged hunks. Ticking a chapter, folder or the Unassigned root completes every file beneath it in one step. Per-chapter counts plus an overall "N of M reviewed".
 - Issues carry the same checkbox: ticking one marks it resolved (written back to the manifest for the skill to read), so completing a finding works like completing a file.
+- Clicking a finding opens its chapter's diff on the line the finding is about, or on its range's first change when it names no line.
 - A finding on a file the branch left wrong without changing it (a stale doc, a forgotten caller) sits under the chapter of the change that caused it and reads "outside the diff". Clicking it opens that file as it stands at the reviewed commit, on the finding's line.
 - Auto-refreshes when the skill regenerates the manifest.
 - Staleness detection: the view flags when the branch has moved past the commit the chapters were generated against, so you know to regenerate the manifest.

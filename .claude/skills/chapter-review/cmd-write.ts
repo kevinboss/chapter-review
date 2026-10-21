@@ -13,8 +13,8 @@ import {
   withIssues,
 } from "./manifest.ts";
 import { isManifest, validateManifest } from "./validate.ts";
-import { branchDiff, coverageErrors } from "./diff.ts";
-import type { Issue, Manifest, ManifestStats, ReviewedUnit } from "./types.ts";
+import { branchDiff, coverageErrors, moveLine, parseHunks } from "./diff.ts";
+import type { Issue, Manifest, ManifestStats, MovedLine, ReviewedUnit } from "./types.ts";
 
 /** A draft as it arrives from outside: a JSON object whose shape is unverified. */
 type Draft = Record<string, unknown>;
@@ -340,11 +340,20 @@ function installDraft(
   }
   const priorIssues: Issue[] = issuesOf(prior);
   const at = asManifest.headSha ?? "HEAD";
-  const { kept, pruned, moved, renumbered, unanchored, entered, uncaused } = carryIssues(
+  const from = prior?.headSha;
+  const lineMover = (fromPath: string, toPath: string, line: number): MovedLine => {
+    if (from === undefined || (sameCommit(from, at) && fromPath === toPath)) {
+      return { line };
+    }
+    const diff = gitTry("diff", "--no-color", "--unified=0", `${from}:${fromPath}`, `${at}:${toPath}`);
+    return moveLine(line, diff === undefined ? [] : parseHunks(diff.split("\n")));
+  };
+  const { kept, pruned, moved, renumbered, unanchored, entered, uncaused, edited, removed } = carryIssues(
     priorIssues,
     asManifest,
     prior,
-    (p) => gitOk("cat-file", "-e", `${at}:${p}`)
+    (p) => gitOk("cat-file", "-e", `${at}:${p}`),
+    lineMover
   );
 
   // From the issues as they were *before* pruning, so an id regeneration drops
@@ -426,12 +435,36 @@ function installDraft(
     if (entered.length > 0) {
       console.log(
         `  ${entered.length} finding${entered.length === 1 ? "" : "s"} outside the diff ` +
-          "on a file the branch now changes, re-anchored to the whole file:"
+          "on a file the branch now changes:"
       );
       for (const e of entered) console.log(`    ${e}`);
       console.log(
         "    Read each change: `issue resolve` the finding if it was the fix, or " +
-          "`issue set <id> --hunk` onto the range it is about."
+          "`issue set <id> --line` onto the line it is about."
+      );
+    }
+    if (edited.length > 0) {
+      console.log(
+        `  ${edited.length} finding${edited.length === 1 ? "" : "s"} whose own line was ` +
+          "edited since (old line -> its replacement, where the finding now sits):"
+      );
+      for (const e of edited) console.log(`    ${e}`);
+      console.log(
+        "    Read each edit: `issue resolve` the finding if it was the fix; leave it be if the " +
+          "problem still stands on the new line; `issue set <id> --line` if it is about another line now. " +
+          "A verified finding stays verified only once its premise is re-checked (`issue unverify` otherwise)."
+      );
+    }
+    if (removed.length > 0) {
+      console.log(
+        `  ${removed.length} finding${removed.length === 1 ? "" : "s"} whose own line was ` +
+          "removed:"
+      );
+      for (const r of removed) console.log(`    ${r}`);
+      console.log(
+        "    The line the note describes is gone, which is usually the fix: `issue resolve` it. " +
+          "A finding in the diff has lost the line, so it anchors to its range, or to the whole file " +
+          "when it has none; if the problem moved, `issue set <id> --line` onto where it is."
       );
     }
     for (const u of uncaused) {

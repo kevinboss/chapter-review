@@ -68,7 +68,7 @@
       "required": ["id", "path", "severity", "note"],
       "additionalProperties": false,
       "dependencies": { "cause": ["line"] },
-      "not": { "anyOf": [{ "required": ["line", "hunk"] }, { "required": ["line", "oldPath"] }] },
+      "not": { "anyOf": [{ "required": ["cause", "hunk"] }, { "required": ["cause", "oldPath"] }] },
       "properties": {
         "id": {
           "type": "string",
@@ -77,17 +77,17 @@
         },
         "path": {
           "$ref": "#/definitions/path",
-          "description": "File the issue is about. With hunk, this is the durable key that survives regeneration. With line, a file the branch does not change but left wrong (a stale doc, a forgotten caller)."
+          "description": "File the issue is about: a file in the diff, or, when no chapter or unassigned entry holds it, a file the branch does not change but left wrong (a stale doc, a forgotten caller), which then needs line. With hunk or line, this is the durable key that survives regeneration."
         },
         "oldPath": { "$ref": "#/definitions/path" },
         "hunk": {
           "$ref": "#/definitions/hunk",
-          "description": "Optional: the specific hunk the issue concerns, for line-level findings."
+          "description": "Optional: the range the issue concerns. With line, the claimed range holding that line."
         },
         "line": {
           "type": "integer",
           "minimum": 1,
-          "description": "1-based line in the file at headSha. Present exactly when path is outside the diff, so it never appears with hunk or oldPath, which describe a change."
+          "description": "1-based line in the file at headSha: the line the issue is about, which the extension opens at. Required for a path outside the diff. Carried to the matching line of the new head on regeneration."
         },
         "cause": {
           "type": "object",

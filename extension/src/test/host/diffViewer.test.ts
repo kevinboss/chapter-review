@@ -155,8 +155,8 @@ suite("diff viewer", () => {
         kind: "issue",
         issue: {
           id: "iss-2.1",
-          path: "a.txt",
-          line: 5,
+          path: "doc.md",
+          line: 3,
           cause: { path: "b.txt" },
           chapterId: "ch-2",
           severity: "low",
@@ -168,8 +168,53 @@ suite("diff viewer", () => {
       // serves the workspace's repo, not the fixture's, so this document is empty.
       const { single } = activeTab();
       assert.equal(single?.scheme, GIT_SCHEME, "the file as reviewed, neither a diff nor the working copy");
-      assert.equal(single.toString(), gitUri(fx.manifest.headSha ?? fx.manifest.head, "a.txt").toString());
+      assert.equal(single.toString(), gitUri(fx.manifest.headSha ?? fx.manifest.head, "doc.md").toString());
     }));
+
+  test("a finding in the diff with a line opens its chapter's diff", () =>
+    withFixture(async (fx) => {
+      await viewerFor(fx, fx.manifest).openIssue({
+        kind: "issue",
+        issue: { id: "iss-2.1", path: "a.txt", line: 5, chapterId: "ch-2", severity: "low", note: "L5" },
+      });
+
+      const { right } = activeTab();
+      assert.equal(right?.scheme, PATCHED_SCHEME, "a line in the diff is not a finding outside it");
+    }));
+
+  test("a finding's line beats the start of the range it sits in", async () => {
+    const ws = vscode.workspace.workspaceFolders?.[0];
+    assert.ok(ws, "the host tests run against a workspace");
+    const git = (...a: string[]): string =>
+      execFileSync("git", a, { cwd: ws.uri.fsPath, encoding: "utf8" }).trim();
+    const manifest: Manifest = {
+      version: 1,
+      base: "main",
+      head: "feat",
+      mergeBase: git("merge-base", "main", "HEAD"),
+      headSha: git("rev-parse", "HEAD"),
+      generatedAt: "2026-10-21T10:00:00Z",
+      chapters: [{ id: "ch-1", title: "edits a", files: [{ path: "a.txt", status: "modified" }] }],
+      unassigned: [],
+    };
+    // The range opens on L2, its first change; the finding is about L5.
+    await new DiffViewer(ws.uri, new PatchedContentProvider(), () => manifest).openIssue({
+      kind: "issue",
+      issue: {
+        id: "iss-1.1",
+        path: "a.txt",
+        line: 5,
+        hunk: { oldStart: 1, oldLines: 6, newStart: 1, newLines: 6 },
+        chapterId: "ch-1",
+        severity: "low",
+        note: "L5",
+      },
+    });
+
+    const editor = vscode.window.activeTextEditor;
+    assert.equal(editor?.document.lineAt(4).text, "L5");
+    assert.equal(editor.selection.active.line, 4);
+  });
 
   test("a finding outside the diff puts the cursor on its line", async () => {
     const ws = vscode.workspace.workspaceFolders?.[0];

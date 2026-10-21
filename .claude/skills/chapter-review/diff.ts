@@ -6,7 +6,7 @@
 // changes missing from every chapter, looking complete the whole way.
 
 import { execFileSync } from "node:child_process";
-import type { FileEntry, FileStatus, Hunk, Manifest } from "./types.ts";
+import type { FileEntry, FileStatus, Hunk, Manifest, MovedLine } from "./types.ts";
 import { allEntries, hunksOverlap } from "./manifest.ts";
 
 /**
@@ -88,7 +88,7 @@ const count = (v: string | undefined): number => (v === undefined ? 1 : Number(v
  * context consumes both. `\ No newline at end of file` is a note about the line
  * before it, not a line, so it advances nothing.
  */
-function parseHunks(body: string[]): DiffHunk[] {
+export function parseHunks(body: string[]): DiffHunk[] {
   const hunks: DiffHunk[] = [];
   const at = { old: 0, new: 0 };
   for (const line of body) {
@@ -120,6 +120,27 @@ function parseHunks(body: string[]): DiffHunk[] {
     }
   }
   return hunks;
+}
+
+/**
+ * Carry 1-based `line` of the old file across `hunks`, a diff of it taken with
+ * `--unified=0`, so every hunk is changed lines only. A line inside a replaced
+ * block lands on the block's counterpart, as near its old offset as the new block
+ * allows, since that is where whatever replaced it now is. A removed line lands
+ * on the line above the gap it left.
+ */
+export function moveLine(line: number, hunks: Hunk[]): MovedLine {
+  const shift = { by: 0 };
+  for (const h of hunks) {
+    if (h.oldLines > 0 && line >= h.oldStart && line < h.oldStart + h.oldLines) {
+      return h.newLines > 0
+        ? { line: h.newStart + Math.min(line - h.oldStart, h.newLines - 1), change: "edited" }
+        : { line: Math.max(1, h.newStart), change: "removed" };
+    }
+    const before = h.oldLines === 0 ? h.oldStart < line : h.oldStart + h.oldLines <= line;
+    if (before) shift.by += h.newLines - h.oldLines;
+  }
+  return { line: line + shift.by };
 }
 
 /** File entries and hunk ranges from unified diff text. */

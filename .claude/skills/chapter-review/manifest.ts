@@ -7,7 +7,7 @@ import path from "node:path";
 import { die, errorMessage, isArray, isRecord, tryReadJson, withoutUndefined } from "./util.ts";
 import { manifestPath, progressPath } from "./git.ts";
 import { isManifest, validateManifest } from "./validate.ts";
-import type { Cause, FileEntry, Hunk, Issue, Manifest, ManifestStats, Progress, ReviewedUnit } from "./types.ts";
+import type { Cause, FileEntry, Hunk, Issue, Manifest, ManifestStats, MovedLine, Progress, ReviewedUnit } from "./types.ts";
 /**
  * Read the stored manifest if it is present, parseable and valid; null otherwise.
  *
@@ -253,7 +253,8 @@ export function currentPathFor(
  * Which chapter should own an issue on `path` (with optional `hunk`)? Prefer a
  * still-valid prior chapterId for stability; otherwise the sole owner; on a
  * split path, the chapter whose hunks overlap; else best-effort first owner.
- * Returns undefined when the path lives only in unassigned or nowhere.
+ * Returns undefined when the path lives only in unassigned or nowhere, and when
+ * `hunk` is a range unassigned claims, since a chapter's diff never shows it.
  */
 export function ownerChapterId(
   manifest: Manifest,
@@ -265,6 +266,10 @@ export function ownerChapterId(
     ch.files.some((f) => f.path === p)
   );
   if (owners.length === 0) return undefined;
+  const quarantined =
+    hunk !== undefined &&
+    manifest.unassigned.some((f) => f.path === p && f.hunks?.some((h) => hunksOverlap(h, hunk)));
+  if (quarantined) return undefined;
   if (owners.length === 1) return owners[0].id;
   if (prevChapterId && owners.some((c) => c.id === prevChapterId)) {
     return prevChapterId;
@@ -308,12 +313,18 @@ export function ownerChapterId(
  * file, the finding becomes an ordinary one on it, listed in `entered`: the edit
  * may be the fix, and only a reading of it can say. A cause that left the diff is
  * dropped and listed in `uncaused`, leaving the finding with no chapter.
+ *
+ * A line moves with the code around it (`moveLine`, from the prior head's file to
+ * the new head's). An open finding whose own line was edited is listed in
+ * `edited`, and one whose line was removed in `removed`, since either may be the
+ * fix. In the diff, the range a line finding is pinned to is re-read off the line.
  */
 export function carryIssues(
   oldIssues: Issue[],
   newManifest: Manifest,
   prior: Manifest | null | undefined,
-  fileAtHead: (p: string) => boolean
+  fileAtHead: (p: string) => boolean,
+  moveLine: (from: string, to: string, line: number) => MovedLine
 ): {
   kept: Issue[];
   pruned: string[];
@@ -322,6 +333,8 @@ export function carryIssues(
   unanchored: string[];
   entered: string[];
   uncaused: string[];
+  edited: string[];
+  removed: string[];
 } {
   const kept: Issue[] = [];
   const pruned: string[] = [];
@@ -330,12 +343,22 @@ export function carryIssues(
   const unanchored: string[] = [];
   const entered: string[] = [];
   const uncaused: string[] = [];
+  const edited: string[] = [];
+  const removed: string[] = [];
   const allocate = issueIdAllocator(issueHighWater(prior, oldIssues));
   for (const issue of oldIssues) {
+    // Read off the manifest the finding was recorded against, so a finding whose
+    // file left the diff is pruned rather than turned into one outside it.
+    const wasOutside = prior
+      ? !pathInManifest(prior, issue.path)
+      : issue.line !== undefined && issue.hunk === undefined && issue.oldPath === undefined;
+    const inDiff = currentPathFor(newManifest, issue.path, prior);
     const placed =
-      issue.line === undefined
-        ? placeInDiff(issue, newManifest, prior)
-        : placeOutside(issue, newManifest, prior, fileAtHead);
+      inDiff !== undefined
+        ? { ...placeInDiff(issue, inDiff, newManifest, moveLine), entered: wasOutside }
+        : wasOutside
+          ? placeOutside(issue, newManifest, prior, fileAtHead, moveLine)
+          : undefined;
     if (placed === undefined) {
       pruned.push(issue.id);
       continue;
@@ -352,6 +375,15 @@ export function carryIssues(
     if (placed.loose !== undefined) unanchored.push(`${id}: ${placed.loose}`);
     if (placed.entered) entered.push(`${id}: ${path}`);
     if (placed.lostCause !== undefined) uncaused.push(`${id}: ${placed.lostCause}`);
+    if (placed.lineChange === "edited" && issue.status !== "resolved") {
+      edited.push(`${id}: ${path}:${String(issue.line)} -> ${String(placed.line)}`);
+    }
+    if (placed.lineChange === "removed" && issue.status !== "resolved") {
+      const gap = placed.gapAfter ?? placed.line ?? 0;
+      removed.push(
+        `${id}: ${path}:${String(issue.line)}, now a gap between lines ${String(gap)} and ${String(gap + 1)}`
+      );
+    }
     kept.push(
       withoutUndefined({
         ...issue,
@@ -364,7 +396,15 @@ export function carryIssues(
       })
     );
   }
-  return { kept, pruned, moved, renumbered, unanchored, entered, uncaused };
+  return { kept, pruned, moved, renumbered, unanchored, entered, uncaused, edited, removed };
+}
+
+/** The claimed range of `p` whose new side holds `line`, if the partition splits `p`. */
+export function claimedRangeAt(manifest: Manifest, p: string, line: number): Hunk | undefined {
+  return allEntries(manifest)
+    .filter((f) => f.path === p)
+    .flatMap((f) => f.hunks ?? [])
+    .find((h) => line >= h.newStart && line < h.newStart + h.newLines);
 }
 
 /** Where a carried finding lands, and what about the move the caller must report. */
@@ -379,19 +419,33 @@ interface Placement {
   loose?: string;
   entered?: boolean;
   lostCause?: string;
+  lineChange?: MovedLine["change"];
+  /** For a removed line no longer stored: the last line before the gap it left. */
+  gapAfter?: number;
 }
 
 function placeInDiff(
   issue: Issue,
+  path: string,
   manifest: Manifest,
-  prior: Manifest | null | undefined
-): Placement | undefined {
-  const path = currentPathFor(manifest, issue.path, prior);
-  if (path === undefined) return undefined;
-  const hunk = issue.hunk === undefined ? undefined : rekey(manifest, path, issue.hunk);
+  moveLine: (from: string, to: string, line: number) => MovedLine
+): Placement {
+  const moved = issue.line === undefined ? undefined : moveLine(issue.path, path, issue.line);
+  const hunk =
+    moved !== undefined
+      ? claimedRangeAt(manifest, path, moved.line)
+      : issue.hunk === undefined
+        ? undefined
+        : rekey(manifest, path, issue.hunk);
+  // A removed line has no counterpart to point at, and the line beside the gap
+  // reads as what the note is about. The range still files the finding.
+  const gone = moved?.change === "removed";
   return {
     path,
     hunk,
+    line: gone ? undefined : moved?.line,
+    gapAfter: gone ? moved.line : undefined,
+    lineChange: moved?.change,
     chapterId: ownerChapterId(manifest, path, hunk, issue.chapterId),
     renamedFrom: path === issue.path ? undefined : issue.path,
     loose:
@@ -405,23 +459,22 @@ function placeOutside(
   issue: Issue,
   manifest: Manifest,
   prior: Manifest | null | undefined,
-  fileAtHead: (p: string) => boolean
+  fileAtHead: (p: string) => boolean,
+  moveLine: (from: string, to: string, line: number) => MovedLine
 ): Placement | undefined {
-  const changed = currentPathFor(manifest, issue.path, prior);
-  if (changed !== undefined) {
-    return { path: changed, chapterId: ownerChapterId(manifest, changed), entered: true };
-  }
   if (!fileAtHead(issue.path)) return undefined;
+  const moved = issue.line === undefined ? undefined : moveLine(issue.path, issue.path, issue.line);
   const causePath =
     issue.cause === undefined ? undefined : currentPathFor(manifest, issue.cause.path, prior);
   if (issue.cause === undefined || causePath === undefined) {
-    return { path: issue.path, line: issue.line, lostCause: issue.cause?.path };
+    return { path: issue.path, line: moved?.line, lineChange: moved?.change, lostCause: issue.cause?.path };
   }
   const causeHunk =
     issue.cause.hunk === undefined ? undefined : rekey(manifest, causePath, issue.cause.hunk);
   return {
     path: issue.path,
-    line: issue.line,
+    line: moved?.line,
+    lineChange: moved?.change,
     cause: withoutUndefined({ path: causePath, hunk: causeHunk }),
     chapterId: ownerChapterId(manifest, causePath, causeHunk, issue.chapterId),
     loose:

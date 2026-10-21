@@ -58,12 +58,11 @@ test("a finding outside the diff is refused when it points at nothing", () => {
   withWrittenRepo((repo) => {
     const add = (...args: string[]): string =>
       cli(["issue", "add", "--severity", "low", "--note", "n", ...args], { cwd: repo.dir }).err;
-    assert.match(add("--path", "a.txt", "--line", "1"), /a\.txt is in the diff/);
     assert.match(add("--path", "doc.md", "--line", "9"), /doc\.md has 3 lines/);
     assert.match(add("--path", "nope.md", "--line", "1"), /nope\.md does not exist at/);
-    assert.match(add("--path", "doc.md", "--line", "1", "--hunk", "1,1,1,1"), /Pass one or the other/);
+    assert.match(add("--path", "doc.md", "--line", "1", "--hunk", "1,1,1,1"), /no change for --hunk or --old-path/);
     assert.match(add("--path", "doc.md", "--line", "0"), /--line must be a line number from 1/);
-    assert.match(add("--path", "b.txt", "--cause-path", "a.txt"), /--cause-path is for a finding outside the diff/);
+    assert.match(add("--path", "b.txt", "--cause-path", "a.txt"), /--cause-path is for a finding on a file the branch does not change/);
     assert.match(add("--path", "doc.md", "--line", "1", "--chapter", "ch-1"), /takes its chapter from --cause-path/);
     assert.match(add("--path", "doc.md", "--line", "1", "--cause-hunk", "1,1,1,1"), /--cause-hunk needs --cause-path/);
     assert.match(add("--path", "doc.md", "--line", "1", "--cause-path", "doc.md"), /--cause-path "doc\.md" is not in the current manifest/);
@@ -150,10 +149,11 @@ test("once the branch changes the file, the finding becomes an ordinary one on i
     assert.equal(r.code, 0, r.all);
     assert.match(r.out, /1 finding outside the diff on a file the branch now changes/);
     assert.match(r.out, /iss-2\.1: doc\.md/);
+    assert.match(r.out, /1 finding whose own line was edited since/);
     const [issue] = repo.readManifest().issues ?? [];
     assert.deepEqual(
       { path: issue.path, line: issue.line, cause: issue.cause, chapterId: issue.chapterId },
-      { path: "doc.md", line: undefined, cause: undefined, chapterId: "ch-2" }
+      { path: "doc.md", line: 3, cause: undefined, chapterId: "ch-2" }
     );
   });
 });

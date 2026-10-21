@@ -1,9 +1,9 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { changeLineFor } from "./changeLine";
-import { applyHunks } from "./diffScope";
+import { applyHunks, scopedLine } from "./diffScope";
 import { gitShow, gitUri, patchedUri, PatchedContentProvider } from "./gitContent";
-import { FileEntry, Hunk, Issue, Manifest, UnassignedEntry } from "./model";
+import { FileEntry, fileHunks, Hunk, Issue, isOutsideDiff, Manifest, UnassignedEntry } from "./model";
 import { FileNode, HunkNode, IssueNode } from "./tree";
 
 type Entry = FileEntry | UnassignedEntry;
@@ -37,7 +37,7 @@ export class DiffViewer {
       return;
     }
     const { issue } = node;
-    if (issue.line !== undefined) {
+    if (issue.line !== undefined && isOutsideDiff(m, issue)) {
       await this.openOutside(issue, issue.line, m);
       return;
     }
@@ -45,7 +45,7 @@ export class DiffViewer {
       .find((c) => c.id === issue.chapterId)
       ?.files.find((f) => f.path === issue.path);
     if (entry && issue.chapterId !== undefined) {
-      await this.openEntry(issue.chapterId, entry, focusHunkFor(issue, entry));
+      await this.openEntry(issue.chapterId, entry, focusHunkFor(issue, entry), issue.line);
     } else {
       await this.openWorkingFile(issue, m);
     }
@@ -53,9 +53,15 @@ export class DiffViewer {
 
   /**
    * Diff of an entry: merge base on the left, the head file (or a chapter-scoped
-   * patch) on the right, with the cursor placed on the focused hunk.
+   * patch) on the right, with the cursor on `focusLine` (a line of the head file)
+   * when the right side holds it, and on the focused hunk's change otherwise.
    */
-  private async openEntry(ownerId: string, entry: Entry, focusHunk?: Hunk): Promise<void> {
+  private async openEntry(
+    ownerId: string,
+    entry: Entry,
+    focusHunk?: Hunk,
+    focusLine?: number
+  ): Promise<void> {
     const m = this.getManifest();
     if (!m) {
       return;
@@ -84,14 +90,24 @@ export class DiffViewer {
         // A hunk from outside this entry misses the map. No line at all then:
         // defaulting to 1 read as if the finding were at the top of the file.
         const focus = focusHunk ?? entry.hunks[0];
-        const at = patch.changeLines.get(focus);
+        const at =
+          (focusLine === undefined
+            ? undefined
+            : scopedLine(focusLine, entry.hunks, fileHunks(m, entry.path))) ??
+          patch.changeLines.get(focus);
         return { right: scoped, line: at === undefined ? undefined : Math.max(0, at - 1) };
       }
       // No scoped diff (whole-file claim, or an added/deleted file), so the right
       // side is the real head file and the focus hunk resolves against it.
       const right =
         entry.status === "deleted" ? gitUri("", entry.path) : gitUri(headRef, entry.path);
-      if (!focusHunk || entry.status === "deleted") {
+      if (entry.status === "deleted") {
+        return { right, line: undefined };
+      }
+      if (focusLine !== undefined) {
+        return { right, line: Math.max(0, focusLine - 1) };
+      }
+      if (!focusHunk) {
         return { right, line: undefined };
       }
       const at = await changeLineFor(this.folderUri.fsPath, m, entry, focusHunk);
@@ -130,9 +146,9 @@ export class DiffViewer {
       const doc = await vscode.workspace.openTextDocument(
         vscode.Uri.joinPath(this.folderUri, issue.path)
       );
-      const at = issue.hunk
-        ? await changeLineFor(this.folderUri.fsPath, m, issue, issue.hunk)
-        : 1;
+      const at =
+        issue.line ??
+        (issue.hunk ? await changeLineFor(this.folderUri.fsPath, m, issue, issue.hunk) : 1);
       const line = Math.max(0, at - 1);
       await vscode.window.showTextDocument(doc, {
         selection: new vscode.Range(line, 0, line, 0),

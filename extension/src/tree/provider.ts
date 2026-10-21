@@ -12,6 +12,7 @@ import {
   isOpen,
   Issue,
   issueNumber,
+  isOutsideDiff,
   Manifest,
   reviewKey,
   UnassignedEntry,
@@ -372,10 +373,11 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     const resolved = !isOpen(issue);
     const confidence = issue.confidence === "verified" ? "verified" : "suspected";
     const parts: string[] = [issue.severity, confidence];
-    if (issue.line !== undefined) parts.push("outside the diff");
+    const outside = this.manifest !== undefined && isOutsideDiff(this.manifest, issue);
+    if (outside) parts.push("outside the diff");
     if (resolved) parts.push("resolved");
     item.description = parts.join(" · ");
-    item.tooltip = issueTooltip(issue);
+    item.tooltip = issueTooltip(issue, outside);
     item.iconPath = issueIcon(issue);
     // Same checkbox affordance as files: ticked means resolved. Its toggle is
     // routed to the manifest (not review progress) by the checkbox handler.
