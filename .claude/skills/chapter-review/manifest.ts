@@ -112,7 +112,7 @@ function backup(dest: string): void {
  * thunk for exactly that reason), so an fs-bound writer belongs beside the two
  * callers instead.
  */
-function writeJsonFile(
+export function writeJsonFile(
   dest: string,
   doc: unknown,
   what: string,
@@ -314,17 +314,30 @@ export function ownerChapterId(
  * may be the fix, and only a reading of it can say. A cause that left the diff is
  * dropped and listed in `uncaused`, leaving the finding with no chapter.
  *
- * A line moves with the code around it (`moveLine`, from the prior head's file to
- * the new head's). An open finding whose own line was edited is listed in
- * `edited`, and one whose line was removed in `removed`, since either may be the
- * fix. In the diff, the range a line finding is pinned to is re-read off the line.
+ * A line moves with the code around it (`moveLine`, from the head of the round the
+ * finding was anchored in to the new head). An open finding whose own line was
+ * edited is listed in `edited`, and one whose line was removed in `removed`, since
+ * either may be the fix. In the diff, the range a line finding is pinned to is
+ * re-read off the line.
+ *
+ * Every finding carried lands in `newManifest`'s round. Findings the caller leaves
+ * where they are still hold ids, so they go in `seq.issues`.
  */
 export function carryIssues(
   oldIssues: Issue[],
   newManifest: Manifest,
-  prior: Manifest | null | undefined,
-  fileAtHead: (p: string) => boolean,
-  moveLine: (from: string, to: string, line: number) => MovedLine
+  ctx: {
+    /** The manifest a finding's anchor was read against: the one of its round. */
+    priorFor: (issue: Issue) => Manifest | null | undefined;
+    seq: { manifest: Manifest | null | undefined; issues: Issue[] };
+    fileAtHead: (p: string) => boolean;
+    moveLine: (
+      from: Manifest | null | undefined,
+      fromPath: string,
+      toPath: string,
+      line: number
+    ) => MovedLine;
+  }
 ): {
   kept: Issue[];
   pruned: string[];
@@ -345,19 +358,25 @@ export function carryIssues(
   const uncaused: string[] = [];
   const edited: string[] = [];
   const removed: string[] = [];
-  const allocate = issueIdAllocator(issueHighWater(prior, oldIssues));
+  const allocate = issueIdAllocator(
+    issueHighWater(ctx.seq.manifest, [...oldIssues, ...ctx.seq.issues])
+  );
   for (const issue of oldIssues) {
+    const prior = ctx.priorFor(issue);
+    const moveLine = (from: string, to: string, line: number): MovedLine =>
+      ctx.moveLine(prior, from, to, line);
     // Read off the manifest the finding was recorded against, so a finding whose
     // file left the diff is pruned rather than turned into one outside it.
     const wasOutside = prior
       ? !pathInManifest(prior, issue.path)
       : issue.line !== undefined && issue.hunk === undefined && issue.oldPath === undefined;
     const inDiff = currentPathFor(newManifest, issue.path, prior);
+    const crossing = prior?.round !== newManifest.round;
     const placed =
       inDiff !== undefined
-        ? { ...placeInDiff(issue, inDiff, newManifest, moveLine), entered: wasOutside }
+        ? { ...placeInDiff(issue, inDiff, newManifest, moveLine, crossing), entered: wasOutside }
         : wasOutside
-          ? placeOutside(issue, newManifest, prior, fileAtHead, moveLine)
+          ? placeOutside(issue, newManifest, prior, ctx.fileAtHead, moveLine)
           : undefined;
     if (placed === undefined) {
       pruned.push(issue.id);
@@ -388,6 +407,7 @@ export function carryIssues(
       withoutUndefined({
         ...issue,
         id,
+        round: newManifest.round,
         path,
         hunk: placed.hunk,
         line: placed.line,
@@ -428,15 +448,24 @@ function placeInDiff(
   issue: Issue,
   path: string,
   manifest: Manifest,
-  moveLine: (from: string, to: string, line: number) => MovedLine
+  moveLine: (from: string, to: string, line: number) => MovedLine,
+  crossing: boolean
 ): Placement {
   const moved = issue.line === undefined ? undefined : moveLine(issue.path, path, issue.line);
+  // Another round's range is in that round's coordinates, which this diff does
+  // not share, so it is found again through where its first new line went.
+  const rangeStart =
+    crossing && moved === undefined && issue.hunk !== undefined
+      ? moveLine(issue.path, path, issue.hunk.newStart).line
+      : undefined;
   const hunk =
     moved !== undefined
       ? claimedRangeAt(manifest, path, moved.line)
-      : issue.hunk === undefined
-        ? undefined
-        : rekey(manifest, path, issue.hunk);
+      : rangeStart !== undefined
+        ? claimedRangeAt(manifest, path, rangeStart)
+        : issue.hunk === undefined
+          ? undefined
+          : rekey(manifest, path, issue.hunk);
   // A removed line has no counterpart to point at, and the line beside the gap
   // reads as what the note is about. The range still files the finding.
   const gone = moved?.change === "removed";
@@ -577,9 +606,8 @@ export function storedIssueSeq(
   return Object.fromEntries(seq.sort(([a], [b]) => Number(a) - Number(b)));
 }
 
-/** Read the reviewer's checkmarks from progress.json. */
-export function readProgress(): ReviewedUnit[] {
-  const p = progressPath();
+/** Read the reviewer's checkmarks from progress.json, or from an earlier round's. */
+export function readProgress(p = progressPath()): ReviewedUnit[] {
   if (!existsSync(p)) return [];
   try {
     const parsed: unknown = JSON.parse(readFileSync(p, "utf8"));
@@ -595,7 +623,7 @@ export function readProgress(): ReviewedUnit[] {
   }
   // Replaced rather than left in place: reporting the loss and leaving the bad
   // bytes there makes every later run repeat the warning.
-  writeProgress([]);
+  writeProgress([], p);
   return [];
 }
 
@@ -606,11 +634,11 @@ const isReviewedUnit = (u: unknown): u is ReviewedUnit =>
  * Write the checkmarks. Same temp-then-rename as the manifest, so a reader never
  * sees a half-file; no lock, because nothing else writes this document.
  */
-export function writeProgress(reviewed: ReviewedUnit[]): void {
+export function writeProgress(reviewed: ReviewedUnit[], p = progressPath()): void {
   const doc: Progress = { version: 1, reviewed };
   // No backup hook: this document is one line per checkmark, rebuilt by the
   // extension as the reviewer ticks, so there is nothing here to recover.
-  writeJsonFile(progressPath(), doc, "review progress");
+  writeJsonFile(p, doc, "review progress");
 }
 
 /**
@@ -700,10 +728,13 @@ function canonicalIssue(issue: Issue): Issue {
 export function withIssues(manifest: Manifest, issues: Issue[]): Manifest {
   const out: Manifest = {
     version: manifest.version,
+    round: manifest.round,
     base: manifest.base,
     head: manifest.head,
     mergeBase: manifest.mergeBase,
-    ...(manifest.headSha !== undefined ? { headSha: manifest.headSha } : {}),
+    fromSha: manifest.fromSha,
+    headSha: manifest.headSha,
+    ...(manifest.replayConflicts !== undefined ? { replayConflicts: manifest.replayConflicts } : {}),
     generatedAt: manifest.generatedAt,
     ...(manifest.summary !== undefined ? { summary: manifest.summary } : {}),
     chapters: manifest.chapters,

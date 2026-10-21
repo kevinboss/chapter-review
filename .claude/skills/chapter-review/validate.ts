@@ -51,6 +51,8 @@ const isArray = (x: unknown): x is unknown[] => Array.isArray(x);
 const isOneOf = (x: unknown, set: Set<string>): boolean =>
   typeof x === "string" && set.has(x);
 
+const isRound = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && x >= 1;
+
 function noExtraKeys(
   obj: Record<string, unknown>,
   allowed: string[],
@@ -161,6 +163,7 @@ function checkIssue(issue: unknown, label: string, push: Push): void {
   if (!id) {
     push(`${label}.id must match iss-<chapter>.<number>`);
   }
+  if (!isRound(issue.round)) push(`${label}.round must be an integer from 1`);
   checkPath(issue.path, `${label}.path`, push);
   if (issue.oldPath !== undefined) checkPath(issue.oldPath, `${label}.oldPath`, push);
   if (issue.hunk !== undefined) checkHunk(issue.hunk, `${label}.hunk`, push);
@@ -220,6 +223,7 @@ function checkIssue(issue: unknown, label: string, push: Push): void {
     issue,
     [
       "id",
+      "round",
       "path",
       "oldPath",
       "hunk",
@@ -252,11 +256,18 @@ function structuralErrors(m: unknown): string[] {
       push(`${k} must be a non-empty string`);
     }
   }
-  if (typeof m.mergeBase !== "string" || !SHA.test(m.mergeBase)) {
-    push("mergeBase must be a hex sha (7-40 chars)");
+  for (const k of ["mergeBase", "fromSha", "headSha"] as const) {
+    const v = m[k];
+    if (typeof v !== "string" || !SHA.test(v)) {
+      push(`${k} must be a hex sha (7-40 chars)`);
+    }
   }
-  if (m.headSha !== undefined && (typeof m.headSha !== "string" || !SHA.test(m.headSha))) {
-    push("headSha, when present, must be a hex sha (7-40 chars)");
+  if (!isRound(m.round)) push("round must be an integer from 1");
+  if (
+    m.replayConflicts !== undefined &&
+    (!isArray(m.replayConflicts) || !m.replayConflicts.every((p) => typeof p === "string"))
+  ) {
+    push("replayConflicts, when present, must be an array of paths");
   }
   if (typeof m.generatedAt !== "string" || !ISO_8601.test(m.generatedAt)) {
     push("generatedAt must be an ISO-8601 date-time");
@@ -287,7 +298,7 @@ function structuralErrors(m: unknown): string[] {
   if (issues !== undefined && !isArray(issues)) push("issues, when present, must be an array");
   noExtraKeys(
     m,
-    ["version", "base", "head", "mergeBase", "headSha", "generatedAt", "summary", "chapters", "unassigned", "issues", "issueSeq"],
+    ["version", "round", "base", "head", "mergeBase", "fromSha", "headSha", "replayConflicts", "generatedAt", "summary", "chapters", "unassigned", "issues", "issueSeq"],
     "manifest",
     push
   );
@@ -306,6 +317,9 @@ function structuralErrors(m: unknown): string[] {
     const ids = new Set<string>();
     issues.forEach((issue, i) => {
       checkIssue(issue, `issues[${i}]`, push);
+      if (isObject(issue) && isRound(issue.round) && isRound(m.round) && issue.round > m.round) {
+        push(`issues[${i}].round is ${String(issue.round)}, past the manifest's round ${String(m.round)}`);
+      }
       if (isObject(issue) && typeof issue.id === "string") {
         if (ids.has(issue.id)) push(`duplicate issue id "${issue.id}"`);
         ids.add(issue.id);

@@ -1,5 +1,6 @@
 import { die } from "./util.ts";
-import { branchDiff, parseDiff } from "./diff.ts";
+import { parseDiff, roundDiff } from "./diff.ts";
+import { earlierRounds, roundHolding } from "./rounds.ts";
 import { issueFieldsFromFlags, parseFlags } from "./flags.ts";
 import { gitTry, short } from "./git.ts";
 import {
@@ -110,7 +111,7 @@ function requireOutsideAnchor(manifest: Manifest, issue: Partial<Issue>): void {
 function requireLineAtHead(manifest: Manifest, issue: Partial<Issue>): void {
   const { path: p, line } = issue;
   if (p === undefined || line === undefined) return;
-  const at = manifest.headSha ?? "HEAD";
+  const at = manifest.headSha;
   const text = gitTry("show", `${at}:${p}`);
   if (text === undefined) {
     die(
@@ -293,7 +294,7 @@ function requireRealHunk(
     }
     return;
   }
-  const diffText = branchDiff(manifest.mergeBase);
+  const diffText = roundDiff(manifest.fromSha, manifest.headSha);
   // Unreadable diff: accept rather than block, as the coverage check does.
   if (diffText === undefined) return;
   const real = parseDiff(diffText).find((f) => f.path === p)?.hunks ?? [];
@@ -368,12 +369,19 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
   if (sub === "help" || sub === "--help" || sub === "-h") issueUsage(0);
   const manifest = readManifestOrDie();
   const issues = issuesOf(manifest);
+  const rounds = [...earlierRounds(), manifest];
+  // A finding is anchored in the latest round whose diff holds its file: an
+  // earlier round's file the author has not touched since is still reviewed
+  // there. A file no round holds is outside the diff, in the current round.
+  const roundFor = (p: string): Manifest => roundHolding(rounds, p) ?? manifest;
+  const roundOf = (n: number): Manifest => rounds.find((m) => m.round === n) ?? manifest;
+  const inRound = (m: Manifest): string =>
+    m.round === manifest.round ? "" : ` (round ${String(m.round)})`;
 
   switch (sub) {
     case "add": {
       const flags = parseFlags(rest, ISSUE_FLAGS);
       const fields = issueFieldsFromFlags(flags);
-      requireRealChapter(manifest, fields.chapterId);
       for (const req of ["path", "severity", "note"] as const) {
         if (fields[req] === undefined) {
           die(`chapter-review: issue add needs --${req}`);
@@ -382,17 +390,19 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       // The loop above exits the process unless all three are set.
       const { path: fieldPath } = fields;
       if (fieldPath === undefined) return;
-      const outside = isOutside(manifest, fields);
+      const target = roundFor(fieldPath);
+      requireRealChapter(target, fields.chapterId);
+      const outside = isOutside(target, fields);
       if (outside) {
-        fields.chapterId = settleOutside(manifest, fields, fields.chapterId);
+        fields.chapterId = settleOutside(target, fields, fields.chapterId);
       } else {
         if (fields.cause !== undefined) die(CAUSE_NEEDS_LINE);
-        requireRealPath(manifest, fieldPath);
-        requireRealOldPath(manifest, fieldPath, fields.oldPath);
-        requireRealHunk(manifest, fieldPath, fields.hunk);
-        fields.hunk = rangeForLine(manifest, fields);
-        requireChapterOwnsPath(manifest, fieldPath, fields.chapterId);
-        requireChapterOwnsHunk(manifest, fieldPath, fields.hunk, fields.chapterId);
+        requireRealPath(target, fieldPath);
+        requireRealOldPath(target, fieldPath, fields.oldPath);
+        requireRealHunk(target, fieldPath, fields.hunk);
+        fields.hunk = rangeForLine(target, fields);
+        requireChapterOwnsPath(target, fieldPath, fields.chapterId);
+        requireChapterOwnsHunk(target, fieldPath, fields.hunk, fields.chapterId);
       }
       // Warned, not refused: re-running a command is the usual cause, but two
       // findings can legitimately share a path and note if a reviewer wants them
@@ -418,10 +428,10 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       // the chapter that owns that range; on an ambiguous split (path in >1
       // chapter, no hunk to match) we pick the first and say so.
       if (fields.chapterId === undefined && !outside) {
-        const owners = manifest.chapters.filter((ch) =>
+        const owners = target.chapters.filter((ch) =>
           ch.files.some((f) => f.path === fields.path)
         );
-        const inferred = ownerChapterId(manifest, fieldPath, fields.hunk, undefined);
+        const inferred = ownerChapterId(target, fieldPath, fields.hunk, undefined);
         if (inferred) fields.chapterId = inferred;
         // Warn when the owner had to be guessed. requireRealHunk has already
         // rejected a range that matches nothing, so the only guess left is a
@@ -442,7 +452,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         // and only a later `issue list` shows the finding as unassigned.
         const quarantined =
           inferred === undefined
-            ? manifest.unassigned.find((f) => f.path === fieldPath)
+            ? target.unassigned.find((f) => f.path === fieldPath)
             : undefined;
         if (quarantined) {
           console.error(
@@ -460,6 +470,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       const id = nextIssueId(manifest, issues, fields.chapterId);
       const issue: Issue = {
         id,
+        round: target.round,
         ...fields,
         path: fieldPath,
         severity,
@@ -470,7 +481,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
       };
       const confidence = issue.confidence === "verified" ? "verified" : "suspected";
       saveIssues(manifest, [...issues, issue], () =>
-        { console.log(`Added ${id} (${issue.severity}, ${confidence}) on ${location(issue)}${issue.chapterId ? ` in ${issue.chapterId}` : ""}.`); }
+        { console.log(`Added ${id} (${issue.severity}, ${confidence}) on ${location(issue)}${issue.chapterId ? ` in ${issue.chapterId}` : ""}${inRound(target)}.`); }
       );
       break;
     }
@@ -488,7 +499,8 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
             "--confidence --chapter --hunk --status"
         );
       }
-      requireRealChapter(manifest, updates.chapterId);
+      const target = updates.path === undefined ? roundOf(issue.round) : roundFor(updates.path);
+      requireRealChapter(target, updates.chapterId);
       // A range or a line belongs to the file it was read from. Moving the
       // finding to another path used to keep the old coordinates, pinning it to
       // lines the new file may not even have; canonicalIssue drops the undefined key.
@@ -505,23 +517,24 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         updates.hunk !== undefined ||
         updates.line !== undefined ||
         updates.cause !== undefined;
-      if (isOutside(manifest, issue)) {
-        const owner = settleOutside(manifest, issue, updates.chapterId);
+      issue.round = target.round;
+      if (isOutside(target, issue)) {
+        const owner = settleOutside(target, issue, updates.chapterId);
         if (reanchored || updates.chapterId !== undefined) issue.chapterId = owner;
       } else {
         if (updates.cause !== undefined) die(CAUSE_NEEDS_LINE);
         issue.cause = undefined;
-        requireRealPath(manifest, updates.path);
-        requireRealOldPath(manifest, issue.path, updates.oldPath);
-        requireChapterOwnsPath(manifest, issue.path, updates.chapterId);
-        requireRealHunk(manifest, issue.path, issue.hunk);
+        requireRealPath(target, updates.path);
+        requireRealOldPath(target, issue.path, updates.oldPath);
+        requireChapterOwnsPath(target, issue.path, updates.chapterId);
+        requireRealHunk(target, issue.path, issue.hunk);
         if (issue.line !== undefined && (updates.line !== undefined || updates.hunk !== undefined)) {
-          issue.hunk = rangeForLine(manifest, { ...issue, hunk: updates.hunk });
+          issue.hunk = rangeForLine(target, { ...issue, hunk: updates.hunk });
         }
         // Against the chapter the finding ends up in: an explicit --chapter wins,
         // and without one the owner is re-read off the anchor below, which cannot
         // disagree with it.
-        requireChapterOwnsHunk(manifest, issue.path, issue.hunk, updates.chapterId);
+        requireChapterOwnsHunk(target, issue.path, issue.hunk, updates.chapterId);
         // Re-anchoring a finding must re-home it: `add` infers the owning chapter
         // from --path/--hunk, so `set` has to as well. Without this, moving a
         // finding to a path or range another chapter owns leaves it filed under
@@ -530,7 +543,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         // explicit --chapter in the same call still wins.
         if (reanchored && updates.chapterId === undefined) {
           // Undefined rather than removed: canonicalIssue drops the key on save.
-          issue.chapterId = ownerChapterId(manifest, issue.path, issue.hunk, undefined);
+          issue.chapterId = ownerChapterId(target, issue.path, issue.hunk, undefined);
         }
       }
       // A finding that changed chapter takes the next id in the new chapter's
@@ -545,7 +558,7 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         // Name the state the move discarded. Silently dropping the range left
         // the finding anchored to a whole file with no sign it had been pinned,
         // and its note still describing the code it came from.
-        const where = issue.chapterId ? ` in ${issue.chapterId}` : "";
+        const where = `${issue.chapterId ? ` in ${issue.chapterId}` : ""}${inRound(target)}`;
         const moved = updates.path !== undefined;
         console.log(
           `Updated ${id}${where}.` +
@@ -613,14 +626,16 @@ export function cmdIssue(sub: string | undefined, rest: string[]): void {
         const cause = i.cause
           ? `, caused by ${i.cause.path}${i.cause.hunk ? ` ${hunkHeader(i.cause.hunk)}` : ""}`
           : "";
+        const own = roundOf(i.round);
+        const round = own.round === manifest.round ? "" : `, round ${String(own.round)}`;
         const where =
-          isOutside(manifest, i)
-            ? ` (${i.chapterId ?? "no chapter"}, outside the diff${cause})`
+          isOutside(own, i)
+            ? ` (${i.chapterId ?? "no chapter"}, outside the diff${cause}${round})`
             : i.chapterId
-              ? ` (${i.chapterId})`
-              : pathInManifest(manifest, i.path)
-                ? " (unassigned)"
-                : " (no anchor: path is not in the diff)";
+              ? ` (${i.chapterId}${round})`
+              : pathInManifest(own, i.path)
+                ? ` (unassigned${round})`
+                : ` (no anchor: path is not in the diff${round})`;
         console.log(
           `${i.id}  [${i.severity}/${confidence}/${status}]  ${location(i)}${where}\n    ${i.note}`
         );

@@ -38,12 +38,18 @@ export interface Cause {
 
 export interface Issue {
   id: string;
+  /**
+   * The review round whose manifest the anchor is read against: its diff for
+   * `hunk` and `chapterId`, its headSha for `line`.
+   */
+  round: number;
   path: string;
   oldPath?: string;
   hunk?: Hunk;
   /**
-   * 1-based line in the file at headSha: the line the finding is about, in the
-   * diff or not. A finding on a file the branch does not change always has one.
+   * 1-based line in the file at the round's headSha: the line the finding is
+   * about, in the diff or not. A finding on a file the branch does not change
+   * always has one.
    */
   line?: number;
   /** For a finding outside the diff: the change responsible, which picks its chapter. */
@@ -83,10 +89,19 @@ export interface Progress {
 
 export interface Manifest {
   version: number;
+  /** 1 for the first review of a branch, one more for each run after the head moved. */
+  round: number;
   base: string;
   head: string;
   mergeBase: string;
-  headSha?: string;
+  /**
+   * Left side of the diff this round partitions: mergeBase in round 1, after that
+   * the previous round's head, or that head replayed onto a merge base that moved.
+   */
+  fromSha: string;
+  headSha: string;
+  /** Files the replay onto a moved merge base conflicted on, diffed from the previous head as it was. */
+  replayConflicts?: string[];
   generatedAt: string;
   summary?: string;
   chapters: Chapter[];

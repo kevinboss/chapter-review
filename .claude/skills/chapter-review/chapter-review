@@ -6,7 +6,7 @@
 //
 //   chapter-review focus                    print what the reviewer is looking at
 //   chapter-review show                     print the current manifest
-//   chapter-review base-check [base]        check the review base is fresh (read-only)
+//   chapter-review base-check [base]        check the review base is fresh, and the next round
 //   chapter-review write [file]             validate a partition draft, then install it
 //   chapter-review uncheck      <flags>     clear a review checkmark (re-read)
 //   chapter-review issue add    <flags>     record a review finding

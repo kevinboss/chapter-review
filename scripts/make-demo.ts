@@ -260,9 +260,11 @@ function emitEntry(owner: string, { file, hunks }: Entry): FileEntry {
 
 const manifest: Manifest = {
   version: 1,
+  round: 1,
   base: "main",
   head: "feat/queue-notifications",
   mergeBase,
+  fromSha: mergeBase,
   headSha,
   generatedAt: new Date().toISOString(),
   summary:

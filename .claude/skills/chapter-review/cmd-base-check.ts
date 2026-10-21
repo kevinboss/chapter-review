@@ -1,5 +1,7 @@
 import { die } from "./util.ts";
-import { branchLeaf, gitDir, gitOk, gitTry, lsRemoteTip, resolveBase, sameCommit } from "./git.ts";
+import { branchLeaf, gitDir, gitOk, gitTry, lsRemoteTip, resolveBase, sameCommit, syncPins } from "./git.ts";
+import { priorStateForCarry } from "./manifest.ts";
+import { earlierRounds, knownChapters, roundBase, roundCommits } from "./rounds.ts";
 
 /**
  * base-check: is the review base fresh enough to diff against? Two ways it goes
@@ -9,7 +11,12 @@ import { branchLeaf, gitDir, gitOk, gitTry, lsRemoteTip, resolveBase, sameCommit
  * on, so merge-base(base, HEAD) lands behind commits already merged to the base
  * and the review fills with already-merged work. Reports both as an `action` the
  * skill acts on: "switch" (auto), "fetch" (ask first), "ok", or "unresolved".
- * Read-only: it never fetches or writes; the skill owns those decisions.
+ * It never fetches or touches the worktree; the skill owns those decisions.
+ *
+ * On "ok" it also reports the round the next `write` makes, since only then is
+ * the merge base that round's diff depends on settled. When the merge base moved
+ * since the last round, that means replaying the previous head onto it, which
+ * creates and pins a commit inside .git.
  */
 export function cmdBaseCheck(argBase?: string): void {
   // A base starting with "-" would reach git as an option rather than a rev:
@@ -23,9 +30,9 @@ export function cmdBaseCheck(argBase?: string): void {
   // hunting for a branch in a directory that has no repo at all.
   gitDir();
   const base = argBase ?? resolveBase();
-  // Values are strings, booleans, numbers or undefined — never `any`; the shape
-  // is documented in SKILL.md's base-check bullet.
-  const result: Record<string, string | number | boolean | null | undefined> = { base };
+  // Values are strings, booleans, numbers or undefined — never `any` — plus the
+  // round object; the shape is documented in SKILL.md's base-check bullet.
+  const result: Record<string, string | number | boolean | null | undefined | NextRound> = { base };
   const emit = (): void => {
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
   };
@@ -113,5 +120,35 @@ export function cmdBaseCheck(argBase?: string): void {
         : `Base ${base} is current.`;
   }
   result.stale = result.action !== "ok";
+  if (result.action === "ok" && mergeBase !== undefined) result.round = nextRound(mergeBase);
   emit();
+}
+
+interface NextRound {
+  number: number;
+  /** False when the head has not moved, so `write` re-partitions this round. */
+  new: boolean;
+  fromSha: string;
+  diff: string;
+  replayConflicts?: string[];
+  chapters: { id: string; title: string; rounds: number[]; files: string[] }[];
+}
+
+/** The round a `write` at this HEAD makes, and what it partitions. */
+function nextRound(mergeBase: string): NextRound {
+  const headSha = gitTry("rev-parse", "HEAD") ?? "";
+  const head = gitTry("rev-parse", "--abbrev-ref", "HEAD") ?? "";
+  const { prior } = priorStateForCarry();
+  const { round, fresh, fromSha, replayConflicts } = roundBase(prior, head, headSha, mergeBase);
+  const sameBranch = prior !== null && prior.head === head;
+  const rounds = sameBranch ? [...earlierRounds(), prior] : [];
+  syncPins(new Set([...roundCommits(rounds), fromSha]));
+  return {
+    number: round,
+    new: fresh,
+    fromSha,
+    diff: `git diff -M --unified=3 ${fromSha}..HEAD`,
+    ...(replayConflicts.length > 0 ? { replayConflicts } : {}),
+    chapters: knownChapters(rounds),
+  };
 }

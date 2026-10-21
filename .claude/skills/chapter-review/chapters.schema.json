@@ -4,12 +4,27 @@
   "title": "Chapter review manifest",
   "description": "Partition of a branch diff into logical review chapters. Written by the chapter-review skill to <git-dir>/chapter-review/chapters.json (tool state inside .git, keeping the worktree clean), consumed by the chapter-review VSCode extension. Structural rules only; the partition rules (every hunk in exactly one chapter or unassigned, no overlaps) are enforced by validate.ts alongside this file, which is authoritative if the two disagree.",
   "type": "object",
-  "required": ["version", "base", "head", "mergeBase", "generatedAt", "chapters", "unassigned"],
+  "required": ["version", "round", "base", "head", "mergeBase", "fromSha", "headSha", "generatedAt", "chapters", "unassigned"],
   "additionalProperties": false,
   "properties": {
     "version": {
       "const": 1,
       "description": "Contract version. Consumers must reject manifests with a version they don't know."
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Review round: 1 for the first review of the branch, one more for each write after the head moved. Earlier rounds are kept read-only under rounds/<n>/. Set by `write`; a draft may leave it out."
+    },
+    "fromSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "Left side of the diff this round partitions, so hunk coordinates refer to fromSha..headSha. mergeBase in round 1; after that the previous round's headSha, or, when the merge base moved, that head replayed onto the new merge base, so the round shows only what the author changed. `chapter-review base-check` prints it before the partition is built; `write` sets it, so a draft leaves it out."
+    },
+    "replayConflicts": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/path" },
+      "description": "Files the replay onto a moved merge base conflicted on. For these, fromSha holds the previous head's version as it was, so their round diff also shows what the new base changed. Set by `write`."
     },
     "base": {
       "type": "string",
@@ -24,12 +39,12 @@
     "mergeBase": {
       "type": "string",
       "pattern": "^[0-9a-f]{7,40}$",
-      "description": "git merge-base <base> <head> at generation time. The diff that was partitioned is mergeBase..head."
+      "description": "git merge-base <base> <head> at generation time. The whole branch is mergeBase..headSha."
     },
     "headSha": {
       "type": "string",
       "pattern": "^[0-9a-f]{7,40}$",
-      "description": "Commit head resolved to at generation time. Hunk coordinates refer to mergeBase..headSha; consumers use it to reconstruct exact content after the branch moves. Always record it."
+      "description": "Commit head resolved to at generation time. Hunk coordinates refer to fromSha..headSha; consumers use it to reconstruct exact content after the branch moves. Set by `write`."
     },
     "generatedAt": {
       "type": "string",
@@ -65,11 +80,16 @@
   "definitions": {
     "issue": {
       "type": "object",
-      "required": ["id", "path", "severity", "note"],
+      "required": ["id", "round", "path", "severity", "note"],
       "additionalProperties": false,
       "dependencies": { "cause": ["line"] },
       "not": { "anyOf": [{ "required": ["cause", "hunk"] }, { "required": ["cause", "oldPath"] }] },
       "properties": {
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The round whose manifest this finding's anchor refers to: its diff for hunk and chapterId, its headSha for line. A new round takes along every open finding on a file it changes, re-anchored; the rest stay in the round they were raised in."
+        },
         "id": {
           "type": "string",
           "pattern": "^iss-[0-9]+\\.[1-9][0-9]*$",

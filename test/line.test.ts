@@ -12,21 +12,12 @@ import type { Chapter } from "../.claude/skills/chapter-review/types.ts";
 const add = (repo: TestRepo, ...args: string[]): ReturnType<typeof cli> =>
   cli(["issue", "add", "--severity", "low", "--note", "n", ...args], { cwd: repo.dir });
 
-// a.txt gains two lines on top, so L5 now sits on line 7.
+// a.txt gains two lines on top, so L5 now sits on line 7. The partition is round
+// 2's, which holds only what this commit changed.
 const prepended = (repo: TestRepo, bottom = "L5"): Chapter[] => {
   writeFileSync(path.join(repo.dir, "a.txt"), `top1\ntop2\nl1\nL2\nl3\nl4\n${bottom}\nl6\n`);
   repo.git("commit", "-qam", "prepend to a");
-  return [
-    { id: "ch-1", title: "edit a top", files: [{ path: "a.txt", status: "modified", hunks: [{ oldStart: 1, oldLines: 3, newStart: 1, newLines: 5 }] }] },
-    {
-      id: "ch-2",
-      title: "edit a bottom + b",
-      files: [
-        { path: "a.txt", status: "modified", hunks: [{ oldStart: 5, oldLines: 1, newStart: 7, newLines: 1 }] },
-        { path: "b.txt", status: "modified" },
-      ],
-    },
-  ];
+  return [{ id: "ch-2", title: "prepend to a", files: [{ path: "a.txt", status: "modified" }] }];
 };
 
 test("a line in the diff picks the range holding it, and that range's chapter", () => {
@@ -101,8 +92,8 @@ test("write moves a line with the code around it", () => {
     assert.doesNotMatch(r.out, /edited since/);
     const [issue] = repo.readManifest().issues ?? [];
     assert.deepEqual(
-      { line: issue.line, hunk: issue.hunk, chapterId: issue.chapterId },
-      { line: 7, hunk: { oldStart: 5, oldLines: 1, newStart: 7, newLines: 1 }, chapterId: "ch-2" }
+      { round: issue.round, line: issue.line, hunk: issue.hunk, chapterId: issue.chapterId },
+      { round: 2, line: 7, hunk: undefined, chapterId: "ch-2" }
     );
   });
 });
@@ -113,8 +104,7 @@ test("write says when a finding's own line was removed, apart from edited ones",
     writeFileSync(path.join(repo.dir, "a.txt"), "l1\nL2\nl3\nl4\nl6\n");
     repo.git("commit", "-qam", "drop L5");
     const whole: Chapter[] = [
-      { id: "ch-1", title: "edit a", files: [{ path: "a.txt", status: "modified" }] },
-      { id: "ch-2", title: "edit b", files: [{ path: "b.txt", status: "modified" }] },
+      { id: "ch-1", title: "drop L5", files: [{ path: "a.txt", status: "modified" }] },
     ];
     const r = cli(["write"], { cwd: repo.dir, input: draft(repo, whole) });
     assert.equal(r.code, 0, r.all);

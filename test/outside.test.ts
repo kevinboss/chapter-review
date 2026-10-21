@@ -131,20 +131,7 @@ test("once the branch changes the file, the finding becomes an ordinary one on i
     writeFileSync(path.join(repo.dir, "doc.md"), "# Doc\n\nb.txt says B1.\n");
     repo.git("commit", "-qam", "fix the doc");
     const r = write(repo, [
-      {
-        id: "ch-1",
-        title: "edit a top",
-        files: [{ path: "a.txt", status: "modified", hunks: [{ oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 }] }],
-      },
-      {
-        id: "ch-2",
-        title: "edit a bottom, b and the doc",
-        files: [
-          { path: "a.txt", status: "modified", hunks: [{ oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 }] },
-          { path: "b.txt", status: "modified" },
-          { path: "doc.md", status: "modified" },
-        ],
-      },
+      { id: "ch-2", title: "fix the doc", files: [{ path: "doc.md", status: "modified" }] },
     ]);
     assert.equal(r.code, 0, r.all);
     assert.match(r.out, /1 finding outside the diff on a file the branch now changes/);
@@ -152,36 +139,26 @@ test("once the branch changes the file, the finding becomes an ordinary one on i
     assert.match(r.out, /1 finding whose own line was edited since/);
     const [issue] = repo.readManifest().issues ?? [];
     assert.deepEqual(
-      { path: issue.path, line: issue.line, cause: issue.cause, chapterId: issue.chapterId },
-      { path: "doc.md", line: 3, cause: undefined, chapterId: "ch-2" }
+      { round: issue.round, path: issue.path, line: issue.line, cause: issue.cause, chapterId: issue.chapterId },
+      { round: 2, path: "doc.md", line: 3, cause: undefined, chapterId: "ch-2" }
     );
   });
 });
 
-test("a cause that leaves the diff leaves the finding with no chapter", () => {
+test("a finding outside the diff stays in its round while a new round leaves its file alone", () => {
   withWrittenRepo((repo) => {
     outside(repo, "--cause-path", "b.txt");
     writeFileSync(path.join(repo.dir, "b.txt"), "b1\n");
     repo.git("commit", "-qam", "revert b");
     const r = write(repo, [
-      {
-        id: "ch-1",
-        title: "edit a top",
-        files: [{ path: "a.txt", status: "modified", hunks: [{ oldStart: 2, oldLines: 1, newStart: 2, newLines: 1 }] }],
-      },
-      {
-        id: "ch-2",
-        title: "edit a bottom",
-        files: [{ path: "a.txt", status: "modified", hunks: [{ oldStart: 5, oldLines: 1, newStart: 5, newLines: 1 }] }],
-      },
+      { id: "ch-2", title: "revert b", files: [{ path: "b.txt", status: "modified" }] },
     ]);
     assert.equal(r.code, 0, r.all);
-    assert.match(r.out, /renumbered iss-2\.1 -> iss-0\.1 \(no chapter\)/);
-    assert.match(r.out, /lost its cause iss-0\.1: b\.txt left the diff/);
+    assert.match(r.out, /0 open on files this round changes came along and 1 open stay in the round they are anchored in/);
     const [issue] = repo.readManifest().issues ?? [];
     assert.deepEqual(
-      { path: issue.path, line: issue.line, cause: issue.cause, chapterId: issue.chapterId },
-      { path: "doc.md", line: 3, cause: undefined, chapterId: undefined }
+      { id: issue.id, round: issue.round, line: issue.line, cause: issue.cause, chapterId: issue.chapterId },
+      { id: "iss-2.1", round: 1, line: 3, cause: { path: "b.txt" }, chapterId: "ch-2" }
     );
   });
 });
