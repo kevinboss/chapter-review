@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { errorMessage, withoutUndefined } from "./util.ts";
 import {
+  GIT_MAX_BUFFER,
   gitTry,
   progressPath,
   roundManifestPath,
@@ -88,7 +89,7 @@ function replayOnto(
   const merged = spawnSync(
     "git",
     ["merge-tree", "--write-tree", "--name-only", "--no-messages", "--merge-base", oldBase, newBase, oldHead],
-    { encoding: "utf8" }
+    { encoding: "utf8", maxBuffer: GIT_MAX_BUFFER }
   );
   if (merged.status !== 0 && merged.status !== 1) {
     console.error(
