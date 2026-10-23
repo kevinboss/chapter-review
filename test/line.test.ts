@@ -6,11 +6,31 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { cli, draft, type TestRepo, withWrittenRepo } from "./helpers.ts";
+import { cli, draft, OK_CHAPTERS, type TestRepo, withRepo, withWrittenRepo } from "./helpers.ts";
 import type { Chapter } from "../.claude/skills/chapter-review/types.ts";
 
 const add = (repo: TestRepo, ...args: string[]): ReturnType<typeof cli> =>
   cli(["issue", "add", "--severity", "low", "--note", "n", ...args], { cwd: repo.dir });
+
+/** `count` distinct lines of about 60 bytes each. */
+const bulk = (count: number, prefix: string): string[] =>
+  Array.from({ length: count }, (_, i) => `${prefix} ${String(i + 1).padStart(6, "0")} ${"x".repeat(44)}`);
+
+/** The fixture branch plus a commit adding `name`, partitioned with it in a chapter of its own. */
+function withAddedFile(name: string, text: string, body: (repo: TestRepo) => void): void {
+  withRepo((repo) => {
+    writeFileSync(path.join(repo.dir, name), text);
+    repo.git("add", name);
+    repo.git("commit", "-qm", `add ${name}`);
+    const chapters: Chapter[] = [
+      ...OK_CHAPTERS,
+      { id: "ch-3", title: `add ${name}`, files: [{ path: name, status: "added" }] },
+    ];
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, chapters) });
+    assert.equal(r.code, 0, `setup write failed: ${r.all}`);
+    body(repo);
+  });
+}
 
 // a.txt gains two lines on top, so L5 now sits on line 7. The partition is round
 // 2's, which holds only what this commit changed.
@@ -70,6 +90,52 @@ test("a line must exist and sit inside a --hunk given with it", () => {
     assert.match(add(repo, "--path", "a.txt", "--line", "9").err, /a\.txt has 6 lines/);
     assert.match(add(repo, "--path", "a.txt", "--line", "2", "--hunk", "5,1,5,1").err, /--line 2 is not inside @@ -5,1 \+5,1 @@/);
     assert.equal(repo.readManifest().issues, undefined, "nothing refused may be written");
+  });
+});
+
+test("a line is checked in a file larger than a child process's default output buffer", () => {
+  withAddedFile("big.md", bulk(50_000, "line").join("\n") + "\n", (repo) => {
+    const r = add(repo, "--path", "big.md", "--line", "50000");
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /Added iss-3\.1 .* on big\.md:50000 in ch-3\./);
+    assert.match(add(repo, "--path", "big.md", "--line", "50001").err, /big\.md has 50000 lines/);
+    const set = cli(["issue", "set", "iss-3.1", "--line", "49999"], { cwd: repo.dir });
+    assert.equal(set.code, 0, set.all);
+  });
+});
+
+test("blank lines at either end of a file count as lines", () => {
+  withAddedFile("blank.md", "\n\nmiddle\n\n\n", (repo) => {
+    assert.equal(add(repo, "--path", "blank.md", "--line", "5").code, 0);
+    assert.match(add(repo, "--path", "blank.md", "--line", "6").err, /blank\.md has 5 lines/);
+  });
+});
+
+test("a commit under review that is not in the repo is not reported as a missing file", () => {
+  withWrittenRepo((repo) => {
+    repo.writeManifest({ ...repo.readManifest(), headSha: "0123456789abcdef0123456789abcdef01234567" });
+    const r = add(repo, "--path", "doc.md", "--line", "1");
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, /0123456 is not a commit in this repository/);
+    assert.doesNotMatch(r.err, /does not exist/);
+  });
+});
+
+test("write moves a line through a diff larger than a child process's default output buffer", () => {
+  const anchor = "the line the finding is about";
+  const before = [...bulk(100, "old"), anchor, ...bulk(20_000, "old")];
+  withAddedFile("big.md", before.join("\n") + "\n", (repo) => {
+    assert.equal(add(repo, "--path", "big.md", "--line", "101").code, 0);
+    const after = ["top1", "top2", ...bulk(100, "new"), anchor, ...bulk(20_000, "new")];
+    writeFileSync(path.join(repo.dir, "big.md"), after.join("\n") + "\n");
+    repo.git("commit", "-qam", "rewrite big.md");
+    const chapters: Chapter[] = [
+      { id: "ch-1", title: "rewrite big.md", files: [{ path: "big.md", status: "modified" }] },
+    ];
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, chapters) });
+    assert.equal(r.code, 0, r.all);
+    const [issue] = repo.readManifest().issues ?? [];
+    assert.deepEqual({ round: issue.round, line: issue.line }, { round: 2, line: 103 });
   });
 });
 

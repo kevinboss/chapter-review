@@ -5,7 +5,13 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { die } from "./util.ts";
+import { die, errorMessage } from "./util.ts";
+
+/**
+ * Room for git output that grows with the repository, a file or a diff. Node's
+ * default of 1 MiB fails on a single large generated file.
+ */
+export const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
 /**
  * Worktree-safe absolute git dir, matching how the extension resolves it, so
@@ -112,9 +118,31 @@ export function gitTry(...args: string[]): string | undefined {
     return execFileSync("git", args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: GIT_MAX_BUFFER,
     }).trim() || undefined;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * The file `p` at `commit`, exactly as committed, or undefined when that commit
+ * has no file there. Dies when git cannot answer for any other reason, since a
+ * caller reading undefined as "no such file" would otherwise misreport it.
+ */
+export function fileAt(commit: string, p: string): string | undefined {
+  if (!gitOk("cat-file", "-e", `${commit}^{commit}`)) {
+    die(`chapter-review: ${short(commit) ?? commit} is not a commit in this repository, so ${p} cannot be read at it.`);
+  }
+  if (gitTry("cat-file", "-t", `${commit}:${p}`) !== "blob") return undefined;
+  try {
+    return execFileSync("git", ["cat-file", "blob", `${commit}:${p}`], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: GIT_MAX_BUFFER,
+    });
+  } catch (e) {
+    die(`chapter-review: could not read ${p} at ${short(commit) ?? commit}: ${errorMessage(e)}`);
   }
 }
 

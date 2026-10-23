@@ -7,6 +7,7 @@
 
 import { execFileSync } from "node:child_process";
 import type { FileEntry, FileStatus, Hunk, Manifest, MovedLine } from "./types.ts";
+import { GIT_MAX_BUFFER } from "./git.ts";
 import { allEntries, hunksOverlap } from "./manifest.ts";
 
 /**
@@ -45,7 +46,7 @@ export function roundDiff(from: string, to: string): string | undefined {
     return execFileSync(
       "git",
       ["diff", "-M", "--no-color", "--unified=3", `${from}..${to}`],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 * 1024 }
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: GIT_MAX_BUFFER }
     );
   } catch {
     return undefined;

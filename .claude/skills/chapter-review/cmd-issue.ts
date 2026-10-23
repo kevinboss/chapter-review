@@ -2,7 +2,7 @@ import { die } from "./util.ts";
 import { parseDiff, roundDiff } from "./diff.ts";
 import { earlierRounds, roundHolding } from "./rounds.ts";
 import { issueFieldsFromFlags, parseFlags } from "./flags.ts";
-import { gitTry, short } from "./git.ts";
+import { fileAt, short } from "./git.ts";
 import {
   allEntries,
   hunkEquals,
@@ -112,7 +112,7 @@ function requireLineAtHead(manifest: Manifest, issue: Partial<Issue>): void {
   const { path: p, line } = issue;
   if (p === undefined || line === undefined) return;
   const at = manifest.headSha;
-  const text = gitTry("show", `${at}:${p}`);
+  const text = fileAt(at, p);
   if (text === undefined) {
     die(
       `chapter-review: ${p} does not exist at ${short(at) ?? at}, the commit under review.\n` +
