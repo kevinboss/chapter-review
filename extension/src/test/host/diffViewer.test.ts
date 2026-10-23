@@ -191,7 +191,7 @@ suite("diff viewer", () => {
       execFileSync("git", a, { cwd: ws.uri.fsPath, encoding: "utf8" }).trim();
     const mergeBase = git("merge-base", "main", "HEAD");
     const manifest: Manifest = {
-      version: 1,
+      version: 2,
       base: "main",
       head: "feat",
       mergeBase,
@@ -227,7 +227,7 @@ suite("diff viewer", () => {
     assert.ok(ws, "the host tests run against a workspace");
     const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: ws.uri.fsPath, encoding: "utf8" }).trim();
     const manifest: Manifest = {
-      version: 1,
+      version: 2,
       base: "main",
       head: "feat",
       mergeBase: headSha,

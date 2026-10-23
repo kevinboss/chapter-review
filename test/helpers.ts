@@ -179,7 +179,7 @@ export function draft(
   extra: Record<string, unknown> = {}
 ): string {
   return JSON.stringify({
-    version: 1,
+    version: 2,
     base: "main",
     head: "feat",
     mergeBase: repo.mergeBase,

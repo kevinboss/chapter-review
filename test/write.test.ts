@@ -244,7 +244,7 @@ test("show and base-check", () => {
     assert.equal(before.code, 0);
     assert.match(before.err, /no manifest/);
     cli(["write"], { cwd: repo.dir, input: draft(repo, OK_CHAPTERS) });
-    assert.match(cli(["show"], { cwd: repo.dir }).out, /"version": 1/);
+    assert.match(cli(["show"], { cwd: repo.dir }).out, /"version": 2/);
     const bc = cli(["base-check"], { cwd: repo.dir });
     assert.equal(bc.code, 0, bc.all);
     assert.match(bc.out, /"action"/);

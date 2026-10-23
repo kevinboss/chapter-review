@@ -259,7 +259,7 @@ function emitEntry(owner: string, { file, hunks }: Entry): FileEntry {
 }
 
 const manifest: Manifest = {
-  version: 1,
+  version: 2,
   round: 1,
   base: "main",
   head: "feat/queue-notifications",

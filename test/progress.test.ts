@@ -3,10 +3,10 @@
 // the CLI as a subprocess against throwaway git repos.
 
 import test from "node:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
-import { cli, draft, OK_CHAPTERS, readJsonAs, withWrittenRepo } from "./helpers.ts";
+import { cli, draft, OK_CHAPTERS, readJsonAs, withRepo, withWrittenRepo } from "./helpers.ts";
 import type { Chapter } from "../.claude/skills/chapter-review/types.ts";
 
 test("uncheck clears whole-file and single-hunk checkmarks", () => {
@@ -276,5 +276,17 @@ test("a corrupt manifest does not overwrite the backup, and is recovered from it
     // reporting the loss and moving on.
     assert.match(r.err, /carrying findings and checkmarks forward from the backup/);
     assert.match(cli(["issue", "list"], { cwd: repo.dir }).out, /precious/);
+  });
+});
+
+test("a manifest in an older format is named as such and replaced", () => {
+  withRepo((repo) => {
+    mkdirSync(path.dirname(repo.manifestPath), { recursive: true });
+    writeFileSync(repo.manifestPath, JSON.stringify({ version: 1, chapters: [], unassigned: [] }));
+
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, OK_CHAPTERS) });
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.err, /is in an older format; there is no earlier backup to keep/);
+    assert.equal(readJsonAs<{ version: number }>(repo.manifestPath).version, 2);
   });
 });

@@ -80,7 +80,7 @@ export interface ReviewedUnit {
 }
 
 export interface Manifest {
-  version: 1;
+  version: 2;
   /** 1 for the first review of the branch; each write after the head moved adds one. */
   round: number;
   base: string;
@@ -139,7 +139,7 @@ function parseJson(text: string): unknown {
 /** Narrowing companion to the checks in parseManifest, so it needs no cast. */
 function hasManifestShape(m: Record<string, unknown>): m is Manifest & Record<string, unknown> {
   return (
-    m.version === 1 &&
+    m.version === 2 &&
     Array.isArray(m.chapters) &&
     Array.isArray(m.unassigned) &&
     typeof m.mergeBase === "string" &&
@@ -158,6 +158,9 @@ function hasManifestShape(m: Record<string, unknown>): m is Manifest & Record<st
   );
 }
 
+/** A chapters.json in a format older than this release reads; the next write replaces it. */
+export class OutdatedManifestError extends Error {}
+
 export function parseManifest(text: string): Manifest {
   const parsed = parseJson(text);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -165,7 +168,10 @@ export function parseManifest(text: string): Manifest {
   }
   const m: Record<string, unknown> = { ...parsed };
   // Reported individually, since each says something different about the file.
-  if (m.version !== 1) {
+  if (typeof m.version === "number" && m.version < 2) {
+    throw new OutdatedManifestError(`chapters.json is in format ${String(m.version)}, older than this release reads`);
+  }
+  if (m.version !== 2) {
     throw new Error(`unsupported chapters.json version: ${String(m.version)}`);
   }
   if (!Array.isArray(m.chapters) || !Array.isArray(m.unassigned)) {

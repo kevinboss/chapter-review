@@ -3,7 +3,7 @@ import * as assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { checkStaleness } from "../../staleness";
-import { parseManifest } from "../../model";
+import { OutdatedManifestError, parseManifest } from "../../model";
 import { withFixture } from "../fixture";
 
 describe("staleness", () => {
@@ -48,7 +48,11 @@ describe("manifest parsing", () => {
   });
 
   it("an unsupported version is refused", () => {
-    assert.throws(() => parseManifest('{"version":2}'), /unsupported chapters.json version/);
+    assert.throws(() => parseManifest('{"version":3}'), /unsupported chapters.json version/);
+  });
+
+  it("an older format is refused as outdated rather than broken", () => {
+    assert.throws(() => parseManifest('{"version":1}'), OutdatedManifestError);
   });
 
   it("malformed JSON names itself", () => {

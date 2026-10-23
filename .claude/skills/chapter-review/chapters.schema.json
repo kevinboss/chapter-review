@@ -8,7 +8,7 @@
   "additionalProperties": false,
   "properties": {
     "version": {
-      "const": 1,
+      "const": 2,
       "description": "Contract version. Consumers must reject manifests with a version they don't know."
     },
     "round": {
