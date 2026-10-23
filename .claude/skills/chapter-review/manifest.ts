@@ -6,7 +6,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, 
 import path from "node:path";
 import { die, errorMessage, isArray, isRecord, tryReadJson, withoutUndefined } from "./util.ts";
 import { manifestPath, progressPath } from "./git.ts";
-import { isManifest, validateManifest } from "./validate.ts";
+import { isManifest, MANIFEST_VERSION, validateManifest } from "./validate.ts";
 import type { Cause, FileEntry, Hunk, Issue, Manifest, ManifestStats, MovedLine, Progress, ReviewedUnit } from "./types.ts";
 /**
  * Read the stored manifest if it is present, parseable and valid; null otherwise.
@@ -87,9 +87,15 @@ function backup(dest: string): void {
   if (!existsSync(dest)) return;
   const bak = `${dest}.bak`;
   if (!readManifestIfValid()) {
-    console.error(
-      `chapter-review: the manifest being replaced is unreadable; keeping the previous backup (${bak}).`
-    );
+    const parsed = tryReadJson(() => readFileSync(dest, "utf8"));
+    const outdated =
+      parsed.ok &&
+      isRecord(parsed.value) &&
+      typeof parsed.value.version === "number" &&
+      parsed.value.version < MANIFEST_VERSION;
+    const what = outdated ? "is in an older format" : "is unreadable";
+    const kept = existsSync(bak) ? `keeping the previous backup (${bak})` : "there is no earlier backup to keep";
+    console.error(`chapter-review: the manifest being replaced ${what}; ${kept}.`);
     return;
   }
   try {

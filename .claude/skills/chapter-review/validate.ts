@@ -18,6 +18,7 @@ import type { FileEntry, FileStatus, Hunk, Manifest, ValidationResult } from "./
 
 type Push = (msg: string) => void;
 
+export const MANIFEST_VERSION = 2;
 const STATUS = new Set(["added", "modified", "deleted", "renamed"]);
 const SEVERITY = new Set(["critical", "high", "low"]);
 const ISSUE_STATUS = new Set(["open", "resolved"]);
@@ -249,7 +250,9 @@ function structuralErrors(m: unknown): string[] {
     push("manifest must be an object");
     return errors;
   }
-  if (m.version !== 1) push(`version must be 1 (got ${JSON.stringify(m.version)})`);
+  if (m.version !== MANIFEST_VERSION) {
+    push(`version must be ${String(MANIFEST_VERSION)} (got ${JSON.stringify(m.version)})`);
+  }
   for (const k of ["base", "head"] as const) {
     const v = m[k];
     if (typeof v !== "string" || v.length < 1) {

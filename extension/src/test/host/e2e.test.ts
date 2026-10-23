@@ -46,7 +46,7 @@ function cli(fx: Fixture, args: string[], input?: string): Promise<string> {
 function draft(fx: Fixture, overrides: Partial<Manifest> = {}): string {
   const { headSha, mergeBase, chapters, unassigned } = fx.manifest;
   return JSON.stringify({
-    version: 1,
+    version: 2,
     base: "main",
     head: "feat",
     mergeBase,
@@ -256,7 +256,7 @@ suite("schema conformance between the two halves", () => {
     const example = path.join(SKILL, "example-chapters.json");
     assert.ok(existsSync(example), "the skill ships a worked example");
     const parsed = parseManifest(readFileSync(example, "utf8"));
-    assert.equal(parsed.version, 1);
+    assert.equal(parsed.version, 2);
     assert.ok(parsed.chapters.length > 0);
   });
 

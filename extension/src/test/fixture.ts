@@ -58,7 +58,7 @@ export function makeFixture(): Fixture {
   const headSha = git("rev-parse", "HEAD").trim();
 
   const manifest: Manifest = {
-    version: 1,
+    version: 2,
     base: "main",
     head: "feat",
     mergeBase,

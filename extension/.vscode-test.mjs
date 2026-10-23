@@ -26,15 +26,18 @@ function reviewWorkspace() {
   git("commit", "-m", "work");
 
   const gitDir = git("rev-parse", "--absolute-git-dir").trim();
+  const mergeBase = git("merge-base", "main", "HEAD").trim();
   mkdirSync(path.join(gitDir, "chapter-review"), { recursive: true });
   writeFileSync(
     path.join(gitDir, "chapter-review", "chapters.json"),
     JSON.stringify(
       {
-        version: 1,
+        version: 2,
+        round: 1,
         base: "main",
         head: "feat",
-        mergeBase: git("merge-base", "main", "HEAD").trim(),
+        mergeBase,
+        fromSha: mergeBase,
         headSha: git("rev-parse", "HEAD").trim(),
         generatedAt: "2026-07-27T10:00:00Z",
         summary: "the workspace the host tests activate against",

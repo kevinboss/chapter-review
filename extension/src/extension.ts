@@ -13,7 +13,7 @@ import {
 } from "./gitContent";
 import { computeDigests } from "./fingerprint";
 import { releasePins } from "./git";
-import { isOpen, Manifest, parseManifest, ReviewedUnit } from "./model";
+import { isOpen, Manifest, OutdatedManifestError, parseManifest, ReviewedUnit } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
 import { checkStaleness } from "./staleness";
@@ -89,8 +89,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const viewMode = context.workspaceState.get<ViewMode>(VIEW_MODE_KEY, "tree");
   const provider = new ChapterTreeProvider(folderUri, viewMode);
   // The rounds as the host holds them: what the tree reads, plus where each
-  // round's checkmarks are written.
-  const state: { rounds: HostRound[] } = { rounds: [] };
+  // round's checkmarks are written. `outdated` marks a current manifest left in
+  // an older format, which the view names instead of raising an error.
+  const state: { rounds: HostRound[]; outdated: boolean } = { rounds: [], outdated: false };
   const roundOf = (n: number | undefined): HostRound | undefined =>
     state.rounds.find((r) => r.manifest.round === n);
   void vscode.commands.executeCommand("setContext", VIEW_MODE_KEY, viewMode);
@@ -113,7 +114,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand("setContext", HAS_MANIFEST_KEY, m !== undefined);
     if (!m) {
       view.description = undefined;
-      view.message = undefined;
+      view.message = state.outdated
+        ? "The review here was written by an older Chapter Review and is ignored. The next write replaces it."
+        : undefined;
       return;
     }
     const { done, total } = provider.progressSummary();
@@ -122,6 +125,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function reload(): Promise<void> {
+    state.outdated = false;
     const current = await readManifest(manifestUri, true);
     const earlier: Manifest[] = [];
     for (const n of current ? Array.from({ length: current.round - 1 }, (_, i) => i + 1) : []) {
@@ -142,7 +146,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try {
       return parseManifest(Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8"));
     } catch (e) {
-      if (report && !(e instanceof vscode.FileSystemError)) {
+      if (report && e instanceof OutdatedManifestError) {
+        state.outdated = true;
+      } else if (report && !(e instanceof vscode.FileSystemError)) {
         void vscode.window.showErrorMessage(`Chapter Review: ${errorMessage(e)}`);
       }
       return undefined;
