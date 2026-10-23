@@ -11,7 +11,8 @@ import {
   resolveGitDir,
   reviewUriPath,
 } from "./gitContent";
-import { computeDigests } from "./fingerprint";
+import { aborted, Coalescer } from "./coalesce";
+import { computeDigests, DigestCache } from "./fingerprint";
 import { releasePins } from "./git";
 import { isOpen, Manifest, OutdatedManifestError, parseManifest, ReviewedUnit } from "./model";
 import { ReviewProgress } from "./progress";
@@ -31,6 +32,11 @@ const PROGRESS_PATH = `${PROTOCOL_DIR}/progress.json`;
 const VIEW_MODE_KEY = "chapterReview.viewMode";
 // Gates the destructive Clear Review entry in the view's menu.
 const HAS_MANIFEST_KEY = "chapterReview.hasManifest";
+// Holds back the "No chapter manifest found" welcome until the first load has
+// settled, so an empty tree that is still loading does not claim there is none.
+const READY_KEY = "chapterReview.ready";
+const VIEW_ID = "chapterReview";
+const SPIN_DELAY_MS = 250;
 
 // Fingerprint of manifest bytes, so the extension can recognize its own writes.
 const sha = (data: Uint8Array): string => createHash("sha256").update(data).digest("hex");
@@ -61,13 +67,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void checkSkill(context);
   void refreshSkillContext(context);
 
+  const ready = (): void => void vscode.commands.executeCommand("setContext", READY_KEY, true);
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) {
+    ready();
     return;
   }
   const folderUri = folder.uri;
   const gitDir = await resolveGitDir(folderUri.fsPath);
   if (!gitDir) {
+    ready();
     return; // not a git repo; the view keeps its welcome content
   }
   const gitDirUri = vscode.Uri.file(gitDir);
@@ -96,7 +105,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     state.rounds.find((r) => r.manifest.round === n);
   void vscode.commands.executeCommand("setContext", VIEW_MODE_KEY, viewMode);
 
-  const view = vscode.window.createTreeView("chapterReview", {
+  const view = vscode.window.createTreeView(VIEW_ID, {
     treeDataProvider: provider,
     showCollapseAll: true,
     // Containers (chapter/folder) and issues carry checkboxes backed by two
@@ -120,11 +129,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
     const { done, total } = provider.progressSummary();
-    view.description = `${done} of ${total} reviewed`;
+    view.description =
+      done === undefined ? `checking ${total} units…` : `${done} of ${total} reviewed`;
     view.message = m.summary ? `${m.head}: ${m.summary}` : m.head;
   }
 
-  async function reload(): Promise<void> {
+  // Fingerprints the reviewed content of each unit so checkmarks track content,
+  // not hunk coordinates: a regenerated chapter drops the check on units whose
+  // content moved. Digests are a pure function of a round's pinned commits and
+  // units, so the cache recomputes them only when those change.
+  const digestCache = new DigestCache((m) => computeDigests(folderUri.fsPath, m));
+  const reloads = new Coalescer(loadRounds);
+  const reload = (): Promise<void> => {
+    const settled = reloads.request();
+    void vscode.window.withProgress({ location: { viewId: VIEW_ID } }, () => settled);
+    return settled;
+  };
+
+  /**
+   * Paints the rounds as soon as their manifests are read, then each round's
+   * checkmarks once its digests are in. After every await a newer reload may
+   * have superseded this one, which then stops without publishing anything.
+   */
+  async function loadRounds(signal: AbortSignal): Promise<void> {
     state.outdated = false;
     const current = await readManifest(manifestUri, true);
     const earlier: Manifest[] = [];
@@ -132,13 +159,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const m = await readManifest(roundUri(n, "chapters.json"), false);
       if (m) earlier.push(m);
     }
-    state.rounds = await Promise.all(
-      [...earlier, ...(current ? [current] : [])].map((m) =>
-        loadRound(m, m === current ? progressUri : roundUri(m.round, "progress.json"))
-      )
+    const rounds = await Promise.all(
+      [...earlier, ...(current ? [current] : [])].map(async (manifest): Promise<HostRound> => {
+        const uri = manifest === current ? progressUri : roundUri(manifest.round, "progress.json");
+        const progress = new ReviewProgress();
+        progress.load(await readProgressUnits(uri));
+        return { manifest, progress, digests: digestCache.known(manifest), progressUri: uri };
+      })
     );
-    provider.rounds = state.rounds;
+    if (signal.aborted) {
+      return;
+    }
+    state.rounds = rounds;
+    provider.rounds = rounds;
     await refreshStaleness();
+
+    const slow = setTimeout(() => {
+      provider.showLoading = true;
+      provider.refresh();
+    }, SPIN_DELAY_MS);
+    const filled = await Promise.all(
+      rounds.map(async (round) => {
+        const digests = await Promise.race([digestCache.digestsFor(round.manifest), aborted(signal)]);
+        if (!digests) {
+          return false;
+        }
+        round.digests = digests;
+        // Persisted when it moved something: the next tick serializes only the
+        // units this manifest declares, which would drop the adopted marks again.
+        if (round.progress.adoptWholeFileMarks(digests)) {
+          await writeProgress(round);
+        }
+        provider.refresh();
+        updateSummary();
+        return true;
+      })
+    ).finally(() => { clearTimeout(slow); });
+    // A superseded load leaves spinners already showing to the load that
+    // replaced it, rather than blinking them off in between.
+    if (filled.every(Boolean)) {
+      provider.showLoading = false;
+    }
   }
 
   /** A manifest, or undefined when it is absent or unreadable; only the current one's errors are shown. */
@@ -153,27 +214,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       return undefined;
     }
-  }
-
-  // Fingerprints the reviewed content of each unit so checkmarks track content,
-  // not hunk coordinates: a regenerated chapter drops the check on units whose
-  // content moved. Recomputed only on load, since digests are a pure function of
-  // the round's pinned commits.
-  async function loadRound(manifest: Manifest, uri: vscode.Uri): Promise<HostRound> {
-    const progress = new ReviewProgress();
-    progress.load(await readProgressUnits(uri));
-    const round: HostRound = {
-      manifest,
-      progress,
-      digests: await computeDigests(folderUri.fsPath, manifest),
-      progressUri: uri,
-    };
-    // Persisted when it moved something: the next tick serializes only the units
-    // this manifest declares, which would drop the adopted marks again.
-    if (progress.adoptWholeFileMarks(round.digests)) {
-      await writeProgress(round);
-    }
-    return round;
   }
 
   /** Checkmarks from a progress document; undefined when it is absent or unreadable. */
@@ -361,8 +401,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           issueUpdates.push({ id: node.issue.id, resolved: checked });
           continue;
         }
+        // A row painted before its round's digests arrived has no digest to tick
+        // against, and setReviewed would record the tick as an untick.
         const round = roundOf(provider.roundOf(node));
-        if (round) {
+        if (round?.digests) {
           round.progress.setReviewed(provider.reviewUnitsFor(node), checked);
           ticked.add(round);
         }
@@ -477,7 +519,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
-  void reload();
+  void reload().finally(ready);
 }
 
 // Nothing to tear down: every disposable is registered on the extension

@@ -1,7 +1,7 @@
 import * as assert from "node:assert/strict";
 import * as vscode from "vscode";
 import { computeDigests } from "../../fingerprint";
-import { ChapterTreeProvider, Node } from "../../tree";
+import { ChapterTreeProvider, Node, RoundView } from "../../tree";
 import { ReviewProgress } from "../../progress";
 import { withFixture, Fixture } from "../fixture";
 import type { Manifest } from "../../model";
@@ -53,6 +53,9 @@ const kinds = (nodes: Node[]): string[] => nodes.map((n) => n.kind);
 // "[object Object]".
 const labelOf = (item: vscode.TreeItem): string =>
   typeof item.label === "string" ? item.label : (item.label?.label ?? "");
+
+const iconOf = (item: vscode.TreeItem): string | undefined =>
+  item.iconPath instanceof vscode.ThemeIcon ? item.iconPath.id : undefined;
 
 suite("chapter tree", () => {
   test("the roots are the chapters, in manifest order", () =>
@@ -198,6 +201,29 @@ suite("chapter tree", () => {
         provider.getChildren(root).map((n) => labelOf(provider.getTreeItem(n))),
         ["0.1 · on noise"]
       );
+    }));
+
+  test("a round shows before its digests are in, without checkboxes until they are", () =>
+    withFixture(async (fx) => {
+      const progress = new ReviewProgress();
+      const provider = new ChapterTreeProvider(vscode.Uri.file(fx.dir), "tree");
+      const round: RoundView = { manifest: fx.manifest, progress, digests: undefined };
+      provider.rounds = [round];
+
+      const chapter = provider.getChildren()[1];
+      const [aTxt] = provider.getChildren(chapter);
+      assert.equal(provider.getTreeItem(chapter).checkboxState, undefined);
+      assert.equal(provider.getTreeItem(aTxt).checkboxState, undefined);
+      assert.equal(provider.getTreeItem(chapter).description, "…/2");
+      assert.equal(iconOf(provider.getTreeItem(chapter)), "book", "no spinner before the host says it is slow");
+      provider.showLoading = true;
+      assert.equal(iconOf(provider.getTreeItem(chapter)), "loading~spin");
+      assert.deepEqual(provider.progressSummary(), { done: undefined, total: 3 });
+
+      round.digests = await computeDigests(fx.dir, fx.manifest);
+      assert.equal(provider.getTreeItem(chapter).checkboxState, vscode.TreeItemCheckboxState.Unchecked);
+      assert.equal(provider.getTreeItem(chapter).description, "0/2");
+      assert.equal(iconOf(provider.getTreeItem(chapter)), "book");
     }));
 
   test("a stale manifest surfaces a warning row", () =>

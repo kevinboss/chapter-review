@@ -63,17 +63,17 @@
     "viewsWelcome": [
       {
         "view": "chapterReview",
-        "when": "chapterReview.skillStatus == missing",
+        "when": "chapterReview.ready && chapterReview.skillStatus == missing",
         "contents": "No chapter manifest found (.git/chapter-review/chapters.json).\nGenerate one with the chapter-review skill in your coding agent, then this view renders the branch as reviewable chapters.\n[Install the skill](command:chapterReview.installSkill)"
       },
       {
         "view": "chapterReview",
-        "when": "chapterReview.skillStatus == present",
+        "when": "chapterReview.ready && chapterReview.skillStatus == present",
         "contents": "No chapter manifest found (.git/chapter-review/chapters.json).\nGenerate one with the chapter-review skill in your coding agent, then this view renders the branch as reviewable chapters.\n[Update the skill](command:chapterReview.updateSkill)"
       },
       {
         "view": "chapterReview",
-        "when": "!chapterReview.skillStatus || chapterReview.skillStatus == current || chapterReview.skillStatus == checking",
+        "when": "chapterReview.ready && (!chapterReview.skillStatus || chapterReview.skillStatus == current || chapterReview.skillStatus == checking)",
         "contents": "No chapter manifest found (.git/chapter-review/chapters.json).\nGenerate one with the chapter-review skill in your coding agent, then this view renders the branch as reviewable chapters."
       }
     ],
