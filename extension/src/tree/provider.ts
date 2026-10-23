@@ -39,6 +39,13 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   /** Every round of the review, oldest first; the last one is the current round. */
   rounds: RoundView[] = [];
 
+  /**
+   * Set by the host once digests have been pending for a moment. Rows whose
+   * counts are still unknown spin only then, so a load that finishes quickly
+   * never flashes a spinner.
+   */
+  showLoading = false;
+
   constructor(
     private readonly workspaceRoot: vscode.Uri,
     public viewMode: ViewMode
@@ -102,14 +109,18 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
    */
   private isReviewed(round: number, key: string): boolean {
     const view = this.roundView(round);
-    return view?.progress.isReviewedAt(key, view.digests.get(key)?.unit) === true;
+    return view?.progress.isReviewedAt(key, view.digests?.get(key)?.unit) === true;
   }
 
-  /** Checkbox state for a node backed by review keys, or none if it has zero. */
+  /**
+   * Checkbox state for a node backed by review keys, or none if it has zero or
+   * its round's digests are still being computed: a tick then would carry no
+   * digest, which setReviewed records as an untick.
+   */
   private checkbox(node: Node): vscode.TreeItemCheckboxState | undefined {
     const keys = this.reviewKeysFor(node);
     const round = this.roundOf(node);
-    if (keys.length === 0 || round === undefined) {
+    if (keys.length === 0 || round === undefined || !this.roundView(round)?.digests) {
       return undefined;
     }
     return keys.every((k) => this.isReviewed(round, k))
@@ -313,10 +324,12 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
     if (!m) {
       return item;
     }
-    const { done, total } = this.countUnits(round, allEntries(m));
+    const units = this.countUnits(round, allEntries(m));
     const day = new Date(m.generatedAt).toLocaleDateString(undefined, { day: "numeric", month: "short" });
-    item.description = `${day} · ${short(m.fromSha)} → ${short(m.headSha)} · ${done}/${total}`;
-    item.iconPath = new vscode.ThemeIcon(current ? "git-commit" : "history");
+    item.description = `${day} · ${short(m.fromSha)} → ${short(m.headSha)} · ${fraction(units)}`;
+    item.iconPath = new vscode.ThemeIcon(
+      this.spins(units) ? LOADING : current ? "git-commit" : "history"
+    );
     item.tooltip = textTooltip(
       round === 1
         ? "The whole branch as first reviewed, from the merge base to its head then."
@@ -342,12 +355,13 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       vscode.TreeItemCollapsibleState.Collapsed
     );
     item.id = `r${String(round)}/chapter:${chapter.id}`;
-    const { done, total } = this.countUnits(round, chapter.files);
+    const units = this.countUnits(round, chapter.files);
+    const { done, total } = units;
     const open = this.issuesForChapter(round, chapter.id).filter(isOpen).length;
     item.description =
-      open > 0 ? `${done}/${total} · ${open} issue${open > 1 ? "s" : ""}` : `${done}/${total}`;
+      open > 0 ? `${fraction(units)} · ${open} issue${open > 1 ? "s" : ""}` : fraction(units);
     item.iconPath = new vscode.ThemeIcon(
-      open > 0 ? "warning" : done === total ? "pass-filled" : "book"
+      this.spins(units) ? LOADING : open > 0 ? "warning" : done === total ? "pass-filled" : "book"
     );
     item.checkboxState = this.checkbox({ kind: "chapter", round, chapter });
     // The full id leads the tooltip: the row shows the bare number, and this is
@@ -362,9 +376,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       vscode.TreeItemCollapsibleState.Collapsed
     );
     item.id = `r${String(round)}/unassignedRoot`;
-    const { done, total } = this.countUnits(round, this.roundView(round)?.manifest.unassigned ?? []);
-    item.description = `${done}/${total}`;
-    item.iconPath = new vscode.ThemeIcon("archive");
+    const units = this.countUnits(round, this.roundView(round)?.manifest.unassigned ?? []);
+    item.description = fraction(units);
+    item.iconPath = new vscode.ThemeIcon(this.spins(units) ? LOADING : "archive");
     item.checkboxState = this.checkbox({ kind: "unassignedRoot", round });
     item.tooltip = textTooltip(
       "Noise quarantined by the skill (lockfiles, generated code, autoformat)"
@@ -494,25 +508,36 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
   }
 
   /** Reviewed/total review units of the current round (backs the view header). */
-  progressSummary(): { done: number; total: number } {
+  progressSummary(): UnitCount {
     const m = this.manifest;
     return m ? this.countUnits(m.round, allEntries(m)) : { done: 0, total: 0 };
   }
 
-  private countUnits(
-    round: number,
-    entries: (FileEntry | UnassignedEntry)[]
-  ): {
-    done: number;
-    total: number;
-  } {
+  private spins(units: UnitCount): boolean {
+    return this.showLoading && units.done === undefined;
+  }
+
+  private countUnits(round: number, entries: (FileEntry | UnassignedEntry)[]): UnitCount {
     const keys = entries.flatMap(entryKeys);
     return {
-      done: keys.filter((k) => this.isReviewed(round, k)).length,
+      done: this.roundView(round)?.digests
+        ? keys.filter((k) => this.isReviewed(round, k)).length
+        : undefined,
       total: keys.length,
     };
   }
 }
+
+/** Review units under a node; `done` is undefined while its round's digests are computed. */
+interface UnitCount {
+  done: number | undefined;
+  total: number;
+}
+
+const fraction = ({ done, total }: UnitCount): string => `${done ?? "…"}/${total}`;
+
+/** The icon a row with a count wears while its round's digests are slow to come. */
+const LOADING = "loading~spin";
 
 const short = (sha: string): string => sha.slice(0, 7);
 

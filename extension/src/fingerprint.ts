@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { gitShow } from "./git";
+import { gitShowMany } from "./git";
 import { allEntries, Manifest, reviewKey } from "./model";
 
 /**
@@ -26,8 +26,9 @@ export type DigestMap = Map<string, UnitDigest>;
  * (identical content, new line numbers) keeps its digest and stays reviewed.
  *
  * Digests are a pure function of the manifest's pinned blobs (fromSha and
- * headSha), so they only need recomputing when the manifest itself changes, not
- * when the branch moves underneath a stale manifest.
+ * headSha), so they only need recomputing when those commits or the units cut
+ * from them change (see DigestCache), not when the branch moves underneath a
+ * stale manifest.
  *
  * Whole-file units hash both sides of the file; hunk units hash only that hunk's
  * old and new lines, so an edit to a sibling hunk leaves this one checked. Every
@@ -39,25 +40,18 @@ export async function computeDigests(repoRoot: string, manifest: Manifest): Prom
   const fromRef = manifest.fromSha;
   const entries = allEntries(manifest);
 
-  // Fetch each (ref, path) blob once, in parallel; a hunk-split file appears
-  // under several entries but its two blobs are read a single time.
-  const blobs = new Map<string, Promise<string>>();
+  // Fetch each (ref, path) blob once; a hunk-split file appears under several
+  // entries but its two blobs are read a single time.
+  const blobs = new Map<string, { ref: string; path: string }>();
   const need = (ref: string, path: string): void => {
-    const k = `${ref}\0${path}`;
-    if (!blobs.has(k)) {
-      blobs.set(k, gitShow(repoRoot, ref, path));
-    }
+    blobs.set(`${ref}\0${path}`, { ref, path });
   };
   for (const e of entries) {
     need(fromRef, e.oldPath ?? e.path);
     need(headRef, e.path);
   }
-  const text = new Map<string, string>();
-  await Promise.all(
-    [...blobs].map(async ([k, pr]) => {
-      text.set(k, await pr);
-    })
-  );
+  const contents = await gitShowMany(repoRoot, [...blobs.values()]);
+  const text = new Map([...blobs.keys()].map((k, i) => [k, contents[i]]));
   const get = (ref: string, path: string): string => text.get(`${ref}\0${path}`) ?? "";
 
   const digests: DigestMap = new Map();
@@ -83,6 +77,58 @@ export async function computeDigests(repoRoot: string, manifest: Manifest): Prom
     }
   }
   return digests;
+}
+
+interface CachedDigests {
+  inputs: string;
+  digests: Promise<DigestMap>;
+  /** Set once `digests` has resolved, so a reload can paint them without waiting. */
+  ready?: DigestMap;
+}
+
+/**
+ * Each round's digests as last computed, so a manifest write that leaves a
+ * round's pinned commits and units alone (a finding added, say) reuses them
+ * rather than reading every blob again. Holds the computation itself, so a
+ * reload that supersedes another picks up the read already under way.
+ */
+export class DigestCache {
+  private readonly rounds = new Map<number, CachedDigests>();
+
+  constructor(private readonly compute: (manifest: Manifest) => Promise<DigestMap>) {}
+
+  /** The round's digests, computed only if its inputs changed since the last call. */
+  digestsFor(manifest: Manifest): Promise<DigestMap> {
+    const inputs = digestInputs(manifest);
+    const cached = this.rounds.get(manifest.round);
+    if (cached?.inputs === inputs) {
+      return cached.digests;
+    }
+    const entry: CachedDigests = {
+      inputs,
+      digests: this.compute(manifest),
+    };
+    void entry.digests.then((d) => {
+      entry.ready = d;
+    });
+    this.rounds.set(manifest.round, entry);
+    return entry.digests;
+  }
+
+  /** The round's digests if they are already computed for these inputs, else undefined. */
+  known(manifest: Manifest): DigestMap | undefined {
+    const cached = this.rounds.get(manifest.round);
+    return cached?.inputs === digestInputs(manifest) ? cached.ready : undefined;
+  }
+}
+
+/** Everything computeDigests reads from a manifest. */
+function digestInputs(m: Manifest): string {
+  return JSON.stringify([
+    m.fromSha,
+    m.headSha,
+    allEntries(m).map((e) => [e.path, e.oldPath ?? null, e.hunks ?? null]),
+  ]);
 }
 
 function sha(s: string): string {

@@ -78,7 +78,8 @@ export interface ProgressReader {
 export interface RoundView {
   manifest: Manifest;
   progress: ProgressReader;
-  digests: DigestMap;
+  /** Undefined while still being computed: the round shows, but not yet what is reviewed. */
+  digests: DigestMap | undefined;
 }
 
 /** Review keys for every file in a folder subtree (backs the folder checkbox). */
