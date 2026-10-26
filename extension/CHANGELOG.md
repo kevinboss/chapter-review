@@ -4,6 +4,31 @@ All notable changes to the Chapter Review extension are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-10-26
+
+### Added
+- Review rounds. When the author pushes fixes after you reviewed, the next `write` starts a new round holding only what changed since your last look, instead of reopening every changed file against the whole branch.
+  Each round is a drawer of its own in the Chapters view: the current one opens, earlier ones close and keep their checkmarks.
+  A file in a fixup round diffs from where that round started, and an inline button switches to the whole-branch diff.
+  When the author also rebased, the old head is replayed onto the new base so the base's own changes stay out of the round. Files that conflict in the replay keep their old version and are named.
+  Open findings on files the round changes move into it with their lines carried along. The rest stay in the round they were raised in.
+  The commits each round reads are pinned so a force-push does not let git collect them, and "Discard Review" releases those pins.
+- A finding inside the diff can point at a single line.
+  Before, it could only anchor to a whole hunk, so clicking it landed on the hunk's first change, in an added file always line 1.
+  `--line` now works for any file at the reviewed commit, and when the code moves, `write` carries each finding's line along and reports findings whose line was edited or removed.
+
+### Changed
+- The manifest format is version 2. A manifest from before rounds shows as one line in the view saying it is outdated, instead of an error toast on every window open. The next `write` replaces it.
+- The Chapters view fills in seconds on a large branch. A branch of 1,212 files took about eight minutes before anything showed.
+  The tree paints as soon as the manifest is read, and checkboxes follow once the file digests are in.
+- A burst of CLI writes, such as a `write` followed by dozens of `issue add`, ends in one reload of the final state. It used to queue reloads that only Reload Window could stop.
+
+### Fixed
+- `--line` on a file over 1 MiB was refused as "does not exist". The same limit left a finding's line unmoved without a word during `write` on a large file.
+- `--line` near the end of a file with trailing blank lines was refused, because the file was trimmed before the check.
+- A git failure while checking a finding's line is no longer reported as a missing file.
+- "No chapter manifest found" no longer flashes while the first load is still running.
+
 ## [0.12.0] - 2026-10-19
 
 ### Added
@@ -192,6 +217,7 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Skill installer: the extension bundles the chapter-review skill and installs
   it into your coding agent, consent-gated.
 
+[0.14.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.14.0
 [0.12.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.12.0
 [0.10.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.10.0
 [0.8.1]: https://github.com/kevinboss/chapter-review/releases/tag/v0.8.1
