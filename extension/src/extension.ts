@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
-import { clearReviewState, confirmClear, hasReviewState } from "./clear";
+import { clearReviewState, confirmClear, hasReviewState, restoreParked } from "./clear";
 import { DiffViewer } from "./diffViewer";
 import { FocusStore, focusForNode, resolveFocus } from "./focus";
 import {
@@ -13,10 +13,11 @@ import {
 } from "./gitContent";
 import { aborted, Coalescer } from "./coalesce";
 import { computeDigests, DigestCache } from "./fingerprint";
-import { releasePins } from "./git";
+import { currentParkName, releasePins, restorePins } from "./git";
 import { isOpen, Manifest, OutdatedManifestError, parseManifest, ReviewedUnit } from "./model";
 import { ReviewProgress } from "./progress";
 import { checkSkill, installSkill, refreshSkillContext } from "./skillInstaller";
+import { refreshOnSave } from "./snapshotWatch";
 import { checkStaleness } from "./staleness";
 import { errorMessage } from "./util";
 import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, RoundView, ViewMode } from "./tree";
@@ -24,6 +25,7 @@ import { ChapterTreeProvider, FileNode, HunkNode, IssueNode, Node, RoundView, Vi
 // Relative to the repo's git dir: tool state lives inside .git, invisible to
 // git status and impossible to commit by accident.
 const PROTOCOL_DIR = "chapter-review";
+const PARKED_DIR = "chapter-review-parked";
 const MANIFEST_PATH = `${PROTOCOL_DIR}/chapters.json`;
 // Review checkmarks live in their own document, written only here. The manifest
 // belongs to the agent's CLI; when both wrote chapters.json, each side's
@@ -131,7 +133,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const { done, total } = provider.progressSummary();
     view.description =
       done === undefined ? `checking ${total} units…` : `${done} of ${total} reviewed`;
-    view.message = m.summary ? `${m.head}: ${m.summary}` : m.head;
+    const label = m.mode === "worktree" ? `${m.head}, working tree` : m.head;
+    view.message = m.summary ? `${label}: ${m.summary}` : label;
   }
 
   // Fingerprints the reviewed content of each unit so checkmarks track content,
@@ -366,7 +369,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       return;
     }
-    if (!(await confirmClear(provider.manifest))) {
+    // Only a worktree review displaces a review of its own branch, so only its
+    // discard brings one back.
+    const parkName =
+      provider.manifest?.mode === "worktree" ? await currentParkName(folderUri.fsPath) : undefined;
+    const parkedUri = parkName === undefined ? undefined : vscode.Uri.joinPath(gitDirUri, PARKED_DIR, parkName);
+    const restores = parkedUri !== undefined && (await hasReviewState(parkedUri));
+    if (!(await confirmClear(provider.manifest, restores))) {
       return;
     }
     try {
@@ -378,6 +387,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
     await releasePins(folderUri.fsPath);
+    if (restores && parkName !== undefined) {
+      try {
+        await restoreParked(parkedUri, protocolUri);
+        await restorePins(folderUri.fsPath, parkName);
+      } catch (e) {
+        void vscode.window.showErrorMessage(
+          `Chapter Review: could not bring back the review parked as "${parkName}": ${errorMessage(e)}`
+        );
+      }
+    }
     // Repainted from here rather than through the watcher: a file removed along
     // with its parent directory does not reliably raise onDidDelete.
     await reload();
@@ -516,7 +535,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (s.focused) {
         void refreshStaleness();
       }
-    })
+    }),
+    refreshOnSave(() => provider.manifest, refreshStaleness)
   );
 
   void reload().finally(ready);

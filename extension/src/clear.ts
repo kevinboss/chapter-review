@@ -20,10 +20,12 @@ const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" 
  * view empty and clearing is the way out of that — so the text has to work
  * without one.
  */
-export function clearDetail(manifest: Manifest | undefined): string {
+export function clearDetail(manifest: Manifest | undefined, restores = false): string {
   const tail =
     "The findings and your review checkmarks go with it. " +
-    "Generating again with the chapter-review skill starts a fresh review.";
+    (restores && manifest
+      ? `The review of ${manifest.head} it displaced comes back.`
+      : "Generating again with the chapter-review skill starts a fresh review.");
   if (!manifest) {
     return `No manifest is loaded, so its contents cannot be listed. ${tail}`;
   }
@@ -35,7 +37,12 @@ export function clearDetail(manifest: Manifest | undefined): string {
     counts.push(plural(open, "open finding"));
   }
   const last = counts.pop();
-  const rounds = manifest.round > 1 ? ` (round ${String(manifest.round)}, earlier rounds included)` : "";
+  const rounds =
+    manifest.mode === "worktree"
+      ? " (working tree)"
+      : manifest.round > 1
+        ? ` (round ${String(manifest.round)}, earlier rounds included)`
+        : "";
   return `${manifest.head}${rounds}: ${counts.join(", ")} and ${last}. ${tail}`;
 }
 
@@ -50,10 +57,10 @@ export async function hasReviewState(dir: vscode.Uri): Promise<boolean> {
 }
 
 /** Ask before discarding. True when the reviewer confirmed. */
-export async function confirmClear(manifest: Manifest | undefined): Promise<boolean> {
+export async function confirmClear(manifest: Manifest | undefined, restores = false): Promise<boolean> {
   const choice = await vscode.window.showWarningMessage(
     "Discard this chapter review?",
-    { modal: true, detail: clearDetail(manifest) },
+    { modal: true, detail: clearDetail(manifest, restores) },
     "Discard"
   );
   return choice === "Discard";
@@ -67,4 +74,13 @@ export async function confirmClear(manifest: Manifest | undefined): Promise<bool
  */
 export async function clearReviewState(dir: vscode.Uri): Promise<void> {
   await vscode.workspace.fs.delete(dir, { recursive: true, useTrash: false });
+}
+
+/**
+ * Put the review parked in `parked` back as `dir`, the protocol directory a
+ * clear has just removed. A worktree review displaced it, and discarding that
+ * review is the moment it was parked for.
+ */
+export async function restoreParked(parked: vscode.Uri, dir: vscode.Uri): Promise<void> {
+  await vscode.workspace.fs.rename(parked, dir, { overwrite: true });
 }

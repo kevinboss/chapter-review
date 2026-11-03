@@ -81,6 +81,8 @@ export interface ReviewedUnit {
 
 export interface Manifest {
   version: 2;
+  /** "worktree" when headSha is a snapshot of the working tree, which has one round. */
+  mode?: "worktree";
   /** 1 for the first review of the branch; each write after the head moved adds one. */
   round: number;
   base: string;
@@ -140,6 +142,7 @@ function parseJson(text: string): unknown {
 function hasManifestShape(m: Record<string, unknown>): m is Manifest & Record<string, unknown> {
   return (
     m.version === 2 &&
+    (m.mode === undefined || m.mode === "worktree") &&
     Array.isArray(m.chapters) &&
     Array.isArray(m.unassigned) &&
     typeof m.mergeBase === "string" &&
@@ -182,7 +185,7 @@ export function parseManifest(text: string): Manifest {
   }
   if (!hasManifestShape(m)) {
     throw new Error(
-      "chapters.json: round must be a number from 1, and base, head, mergeBase, fromSha and headSha strings"
+      'chapters.json: round must be a number from 1, base, head, mergeBase, fromSha and headSha strings, and mode "worktree" when present'
     );
   }
   return m;

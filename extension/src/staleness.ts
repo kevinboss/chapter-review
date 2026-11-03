@@ -1,4 +1,4 @@
-import { gitDirtyCount, gitMergeBase, gitRevParse } from "./git";
+import { gitDirtyCount, gitEditedSince, gitMergeBase, gitRevParse } from "./git";
 import { Manifest } from "./model";
 
 export interface Staleness {
@@ -13,6 +13,11 @@ export interface Staleness {
    * can be pinned to the right commit while the files on disk have moved past it.
    */
   dirty?: number;
+  /**
+   * Set for a worktree review instead of the rest: the files on disk that differ
+   * from the snapshot it reads. Edits are expected there, so they never make it stale.
+   */
+  snapshot?: { edited?: number };
 }
 
 /** Two hex refs name the same commit if one is a prefix of the other. */
@@ -34,6 +39,10 @@ function sameCommit(a: string, b: string): boolean {
  * reported as stale, so the warning never fires on a false positive.
  */
 export async function checkStaleness(repoRoot: string, manifest: Manifest): Promise<Staleness> {
+  if (manifest.mode === "worktree") {
+    const edited = await gitEditedSince(repoRoot, manifest.headSha);
+    return { stale: false, snapshot: edited === undefined ? {} : { edited } };
+  }
   const liveHead = await gitRevParse(repoRoot, "HEAD");
   const liveMergeBase = await gitMergeBase(repoRoot, manifest.base, "HEAD");
   const count = await gitDirtyCount(repoRoot);

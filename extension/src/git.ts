@@ -3,6 +3,9 @@
 // node without launching an editor.
 
 import { execFile, spawn } from "node:child_process";
+import { copyFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 
 const MAX_BLOB = 64 * 1024 * 1024;
 
@@ -164,8 +167,89 @@ export function gitDirtyCount(repoRoot: string): Promise<number | undefined> {
   });
 }
 
+/**
+ * Files whose content on disk differs from `commit`, or undefined if the query
+ * can't run. A worktree review reads a snapshot, and this is how far the files
+ * have moved on from it. The files go into a tree the way the CLI took the
+ * snapshot, through a copy of the index, because diffing against the real index
+ * counts every file that was untracked then, and still is, as deleted.
+ */
+export async function gitEditedSince(repoRoot: string, commit: string): Promise<number | undefined> {
+  const top = await git(repoRoot, ["rev-parse", "--show-toplevel"]);
+  const index = await git(repoRoot, ["rev-parse", "--git-path", "index"]);
+  if (!top || !index) {
+    return undefined;
+  }
+  const dir = await mkdtemp(path.join(tmpdir(), "chapter-review-"));
+  const env = { ...process.env, GIT_INDEX_FILE: path.join(dir, "index") };
+  try {
+    const copied = await copyFile(path.resolve(repoRoot, index), env.GIT_INDEX_FILE).then(
+      () => true,
+      () => false
+    );
+    const seeded = copied || (await git(top, ["read-tree", "HEAD"], undefined, env)) !== undefined;
+    const added = seeded && (await git(top, ["add", "--all"], undefined, env)) !== undefined;
+    const tree = added ? await git(top, ["write-tree"], undefined, env) : undefined;
+    const names = tree ? await git(top, ["diff", "--name-only", commit, tree], undefined, env) : undefined;
+    return names === undefined ? undefined : names.split("\n").filter((l) => l.trim() !== "").length;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+function git(
+  repoRoot: string,
+  args: string[],
+  input?: string,
+  env?: NodeJS.ProcessEnv
+): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const child = execFile("git", args, { cwd: repoRoot, env, maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+      resolve(err ? undefined : stdout.trim());
+    });
+    child.stdin?.end(input);
+  });
+}
+
 // Where the CLI pins the commits each round's diff is read from, per worktree.
 const PIN_PREFIX = "refs/worktree/chapter-review/";
+// A parked review's pins, under `<prefix><name>/`.
+const PARKED_PIN_PREFIX = "refs/worktree/chapter-review-parked/";
+
+/**
+ * The name the CLI parks a review of what is checked out under: the branch with
+ * `/` as `-`, or the short commit when there is no usable branch name. Must stay
+ * the CLI's `parkName`, or a discard looks for the parked review under another name.
+ */
+export async function currentParkName(repoRoot: string): Promise<string | undefined> {
+  const sha = await git(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+  if (!sha) {
+    return undefined;
+  }
+  const branch = await git(repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const name = branch?.replace(/[/\\:*?"<>|]/g, "-");
+  const usable =
+    name !== undefined &&
+    name !== "" &&
+    name !== "HEAD" &&
+    (await git(repoRoot, ["check-ref-format", `${PARKED_PIN_PREFIX}${name}/x`])) !== undefined;
+  return usable ? name : sha.slice(0, 7);
+}
+
+/** Move the pins of the review parked as `name` back to where the installed review's pins live. */
+export async function restorePins(repoRoot: string, name: string): Promise<void> {
+  const prefix = `${PARKED_PIN_PREFIX}${name}/`;
+  const listed = await git(repoRoot, ["for-each-ref", "--format=%(refname) %(objectname)", prefix]);
+  const ops = (listed ?? "").split("\n").flatMap((line) => {
+    const m = /^(\S+) ([0-9a-f]+)$/.exec(line);
+    return m?.[1].startsWith(prefix) === true
+      ? [`update ${PIN_PREFIX}${m[1].slice(prefix.length)} ${m[2]}`, `delete ${m[1]}`]
+      : [];
+  });
+  if (ops.length > 0) {
+    await git(repoRoot, ["update-ref", "--stdin"], ops.join("\n") + "\n");
+  }
+}
 
 /**
  * Drop every pin the CLI made for this worktree's review, so a discarded review

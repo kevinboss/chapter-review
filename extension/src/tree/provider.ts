@@ -146,6 +146,9 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       if (this.staleness?.stale) {
         roots.unshift({ kind: "staleWarning" });
       }
+      if (current.mode === "worktree") {
+        roots.unshift({ kind: "snapshotNote" });
+      }
       return roots;
     }
     switch (node.kind) {
@@ -188,6 +191,7 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
       case "issue":
       case "staleWarning":
       case "dirtyWarning":
+      case "snapshotNote":
         return [];
     }
   }
@@ -274,7 +278,29 @@ export class ChapterTreeProvider implements vscode.TreeDataProvider<Node> {
         return this.staleWarningItem();
       case "dirtyWarning":
         return this.dirtyWarningItem();
+      case "snapshotNote":
+        return this.snapshotNoteItem();
     }
+  }
+
+  private snapshotNoteItem(): vscode.TreeItem {
+    const n = this.staleness?.snapshot?.edited ?? 0;
+    const item = new vscode.TreeItem(
+      n === 0
+        ? "Snapshot of the working tree"
+        : `Snapshot of the working tree, ${n} file${n === 1 ? "" : "s"} edited since`,
+      vscode.TreeItemCollapsibleState.None
+    );
+    item.id = "snapshotNote";
+    item.iconPath = new vscode.ThemeIcon("device-camera");
+    item.tooltip = textTooltip(
+      "This review shows your uncommitted changes as they were when it was generated, " +
+        "so edits you make now do not move it. Re-run the chapter-review skill to review " +
+        "them, or discard the review once its findings are fixed: the review of the branch " +
+        "it displaced then comes back."
+    );
+    item.command = { command: "chapterReview.refresh", title: "Re-check", arguments: [] };
+    return item;
   }
 
   private staleWarningItem(): vscode.TreeItem {

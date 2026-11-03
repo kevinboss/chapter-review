@@ -2,10 +2,11 @@
 // it leaves behind is the whole of the behaviour: nothing, backup included.
 
 import * as assert from "node:assert/strict";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { clearDetail, clearReviewState, hasReviewState } from "../../clear";
+import { clearDetail, clearReviewState, hasReviewState, restoreParked } from "../../clear";
+import { currentParkName, restorePins } from "../../git";
 import type { Issue } from "../../model";
 import { withFixture, Fixture } from "../fixture";
 
@@ -68,6 +69,27 @@ suite("clearing a review", () => {
       await clearReviewState(protocolUri(fx));
       assert.equal(await hasReviewState(protocolUri(fx)), false);
     }));
+
+  test("puts the review parked for the branch back, its pins included", () =>
+    withFixture(async (fx) => {
+      const parked = path.join(fx.gitDir, "chapter-review-parked", "feat");
+      mkdirSync(parked, { recursive: true });
+      writeFileSync(path.join(parked, "chapters.json"), JSON.stringify(fx.manifest, null, 2) + "\n");
+      fx.git("update-ref", `refs/worktree/chapter-review-parked/feat/${fx.manifest.headSha}`, fx.manifest.headSha);
+      assert.equal(await currentParkName(fx.dir), "feat", "the name the CLI parks a review of feat under");
+
+      await clearReviewState(protocolUri(fx));
+      await restoreParked(vscode.Uri.file(parked), protocolUri(fx));
+      await restorePins(fx.dir, "feat");
+
+      assert.ok(existsSync(path.join(protocolDir(fx), "chapters.json")));
+      assert.equal(existsSync(parked), false);
+      assert.equal(fx.git("for-each-ref", "--format=%(refname)", "refs/worktree/chapter-review-parked/").trim(), "");
+      assert.equal(
+        fx.git("for-each-ref", "--format=%(refname)", "refs/worktree/chapter-review/").trim(),
+        `refs/worktree/chapter-review/${fx.manifest.headSha}`
+      );
+    }));
 });
 
 suite("what the confirm dialog says is at stake", () => {
@@ -86,6 +108,13 @@ suite("what the confirm dialog says is at stake", () => {
       // The clause is dropped, not zeroed. "The findings … go with it" stays,
       // since a resolved one is still discarded.
       assert.doesNotMatch(detail, /open finding/);
+    }));
+
+  test("says a worktree review gives the review it displaced back", () =>
+    withFixture((fx) => {
+      const detail = clearDetail({ ...fx.manifest, mode: "worktree" }, true);
+      assert.match(detail, /^feat \(working tree\): 2 chapters and 2 files\./);
+      assert.match(detail, /The review of feat it displaced comes back\.$/);
     }));
 
   test("still reads when the manifest could not be parsed", () => {
