@@ -1,6 +1,9 @@
 import * as assert from "node:assert/strict";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { computeDigests } from "../../fingerprint";
+import { refreshOnSave } from "../../snapshotWatch";
+import { checkStaleness } from "../../staleness";
 import { ChapterTreeProvider, Node, RoundView } from "../../tree";
 import { ReviewProgress } from "../../progress";
 import { withFixture, Fixture } from "../fixture";
@@ -231,5 +234,64 @@ suite("chapter tree", () => {
       const { provider } = await wire(fx);
       provider.staleness = { stale: true, summary: "Review may be out of date", detail: "d" };
       assert.equal(provider.getChildren()[0].kind, "staleWarning");
+    }));
+
+  test("a worktree review opens on a row saying it shows a snapshot", () =>
+    withFixture(async (fx) => {
+      const { provider } = await wire(fx, { ...fx.manifest, mode: "worktree" });
+      const roots = provider.getChildren();
+      assert.deepEqual(kinds(roots), ["snapshotNote", "chapter", "chapter"]);
+      assert.equal(labelOf(provider.getTreeItem(roots[0])), "Snapshot of the working tree");
+      provider.staleness = { stale: false, snapshot: { edited: 2 } };
+      assert.equal(labelOf(provider.getTreeItem(roots[0])), "Snapshot of the working tree, 2 files edited since");
+    }));
+
+  test("saving a file brings the snapshot row's count up to date, in a worktree review only", () =>
+    withFixture(async (fx) => {
+      const worktree: Manifest = { ...fx.manifest, mode: "worktree" };
+      const { provider } = await wire(fx, worktree);
+      provider.staleness = await checkStaleness(fx.dir, worktree);
+      const row = provider.getChildren()[0];
+      assert.equal(labelOf(provider.getTreeItem(row)), "Snapshot of the working tree");
+
+      const branchRefreshes: string[] = [];
+      const listeners: vscode.Disposable[] = [];
+      const refreshed = new Promise<void>((resolve) => {
+        listeners.push(
+          refreshOnSave(
+            () => worktree,
+            async () => {
+              provider.staleness = await checkStaleness(fx.dir, worktree);
+              resolve();
+            }
+          ),
+          refreshOnSave(
+            () => fx.manifest,
+            () => {
+              branchRefreshes.push("refreshed");
+              return Promise.resolve();
+            }
+          )
+        );
+      });
+      try {
+        const doc = await vscode.workspace.openTextDocument(path.join(fx.dir, "b.txt"));
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(doc.uri, new vscode.Position(0, 0), "fixed\n");
+        assert.ok(await vscode.workspace.applyEdit(edit));
+        assert.ok(await doc.save());
+        const timer: { id?: NodeJS.Timeout } = {};
+        const outcome = await Promise.race([
+          refreshed.then(() => "refreshed"),
+          new Promise<string>((resolve) => { timer.id = setTimeout(() => { resolve("no refresh"); }, 5000); }),
+        ]);
+        clearTimeout(timer.id);
+        assert.equal(outcome, "refreshed", "the save should have refreshed the worktree review");
+      } finally {
+        listeners.forEach((l) => { l.dispose(); });
+      }
+
+      assert.equal(labelOf(provider.getTreeItem(row)), "Snapshot of the working tree, 1 file edited since");
+      assert.deepEqual(branchRefreshes, [], "a branch review has its own warning rows and no snapshot to count against");
     }));
 });
