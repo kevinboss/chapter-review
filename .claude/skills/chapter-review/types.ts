@@ -89,6 +89,12 @@ export interface Progress {
 
 export interface Manifest {
   version: number;
+  /**
+   * "worktree" for a review of a snapshot of the working tree, which has one
+   * round and replaces nothing: the branch review it displaced is parked and
+   * comes back when it is discarded. Absent for a review of the branch's commits.
+   */
+  mode?: "worktree";
   /** 1 for the first review of a branch, one more for each run after the head moved. */
   round: number;
   base: string;
@@ -97,8 +103,11 @@ export interface Manifest {
   /**
    * Left side of the diff this round partitions: mergeBase in round 1, after that
    * the previous round's head, or that head replayed onto a merge base that moved.
+   * In a worktree review, HEAD for the open changes alone or mergeBase for the
+   * branch and the open changes together.
    */
   fromSha: string;
+  /** The reviewed commit: HEAD, or in a worktree review the snapshot taken on top of it. */
   headSha: string;
   /** Files the replay onto a moved merge base conflicted on, diffed from the previous head as it was. */
   replayConflicts?: string[];

@@ -3,7 +3,7 @@
 // the CLI as a subprocess against throwaway git repos.
 
 import test from "node:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { cli, draft, OK_CHAPTERS, readJsonAs, withRepo, withWrittenRepo } from "./helpers.ts";
@@ -211,7 +211,7 @@ test("write refuses a branch with nothing to review", () => {
   });
 });
 
-test("write says whose review it is replacing when the branch changed", () => {
+test("write parks the review of the branch it displaces, and says so", () => {
   withWrittenRepo((repo) => {
     cli(["issue", "add", "--path", "b.txt", "--severity", "low", "--note", "x"], { cwd: repo.dir });
     repo.git("checkout", "-b", "other");
@@ -222,8 +222,9 @@ test("write says whose review it is replacing when the branch changed", () => {
     ];
     const r = cli(["write"], { cwd: repo.dir, input: draft(repo, other, { head: "other" }) });
     assert.equal(r.code, 0, r.all);
-    // One manifest per repo, so this is legitimate but it took the old one with it.
-    assert.match(r.err, /replaces the review of "feat" \(2 chapters, 1 findings\)/);
+    assert.match(r.out, /parked the review of feat \(round 1, 1 open finding\) as "feat"/);
+    assert.doesNotMatch(r.out, /discarding/, "a branch review has no working-tree review to discard");
+    assert.ok(existsSync(path.join(repo.gitDir, "chapter-review-parked", "feat", "chapters.json")));
   });
 });
 

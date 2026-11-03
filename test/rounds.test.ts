@@ -157,7 +157,7 @@ test("a file the replay conflicts on keeps the previous head's version, and says
   });
 });
 
-test("a review of another branch starts at round 1 and drops the earlier rounds", () => {
+test("a review of another branch starts at round 1 and parks the earlier rounds", () => {
   withWrittenRepo((repo) => {
     assert.equal(cli(["write"], { cwd: repo.dir, input: draft(repo, commitB(repo, "B2\n", "touch b")) }).code, 0);
     assert.ok(existsSync(roundDir(repo, 1)));
@@ -171,5 +171,38 @@ test("a review of another branch starts at round 1 and drops the earlier rounds"
     assert.equal(r.code, 0, r.all);
     assert.equal(repo.readManifest().round, 1);
     assert.ok(!existsSync(path.join(repo.gitDir, "chapter-review", "rounds")));
+    assert.ok(existsSync(path.join(repo.gitDir, "chapter-review-parked", "feat", "rounds", "1", "chapters.json")));
+    assert.ok(pins(repo).length > 0);
+    assert.ok(
+      repo.git("for-each-ref", "--format=%(refname)", "refs/worktree/chapter-review-parked/feat/").trim() !== "",
+      "the parked review's commits stay pinned"
+    );
+  });
+});
+
+test("writing a review of a branch again brings its parked review back", () => {
+  withWrittenRepo((repo) => {
+    assert.equal(cli(["write"], { cwd: repo.dir, input: draft(repo, commitB(repo, "B2\n", "touch b")) }).code, 0);
+    const featHead = repo.git("rev-parse", "HEAD").trim();
+    repo.git("checkout", "-q", "-b", "other");
+    writeFileSync(path.join(repo.dir, "b.txt"), "B3\n");
+    repo.git("commit", "-qam", "diverge");
+    const other: Chapter[] = [
+      { id: "ch-1", title: "a and b", files: [{ path: "a.txt", status: "modified" }, { path: "b.txt", status: "modified" }] },
+    ];
+    assert.equal(cli(["write"], { cwd: repo.dir, input: draft(repo, other, { head: "other" }) }).code, 0);
+
+    repo.git("checkout", "-q", "feat");
+    const round = nextRound(repo);
+    assert.deepEqual({ number: round?.number, fresh: round?.new }, { number: 2, fresh: false }, "round 2 of feat goes on");
+    const round2: Chapter[] = [{ id: "ch-2", title: "touch b", files: [{ path: "b.txt", status: "modified" }] }];
+    const r = cli(["write"], { cwd: repo.dir, input: draft(repo, round2, { headSha: featHead }) });
+    assert.equal(r.code, 0, r.all);
+    assert.match(r.out, /brought back the review of feat parked earlier \(round 2/);
+    assert.match(r.out, /parked the review of other \(round 1/);
+    assert.equal(repo.readManifest().round, 2);
+    assert.ok(existsSync(path.join(roundDir(repo, 1), "chapters.json")), "round 1 is back in place");
+    assert.ok(!existsSync(path.join(repo.gitDir, "chapter-review-parked", "feat")));
+    assert.ok(existsSync(path.join(repo.gitDir, "chapter-review-parked", "other", "chapters.json")));
   });
 });

@@ -734,6 +734,7 @@ function canonicalIssue(issue: Issue): Issue {
 export function withIssues(manifest: Manifest, issues: Issue[]): Manifest {
   const out: Manifest = {
     version: manifest.version,
+    ...(manifest.mode !== undefined ? { mode: manifest.mode } : {}),
     round: manifest.round,
     base: manifest.base,
     head: manifest.head,

@@ -1,7 +1,40 @@
 import { die } from "./util.ts";
-import { branchLeaf, gitDir, gitOk, gitTry, lsRemoteTip, resolveBase, sameCommit, syncPins } from "./git.ts";
+import {
+  branchLeaf,
+  gitDir,
+  gitOk,
+  gitTry,
+  lsRemoteTip,
+  openChangeCount,
+  resolveBase,
+  sameCommit,
+  snapshotWorktree,
+  syncPins,
+} from "./git.ts";
 import { priorStateForCarry } from "./manifest.ts";
+import { continuedReview, parkedReviews, parkedRoundsDir } from "./park.ts";
 import { earlierRounds, knownChapters, roundBase, roundCommits } from "./rounds.ts";
+import type { ParkedSummary } from "./park.ts";
+
+/** What a worktree review covers: the open changes alone, or the branch with them. */
+type WorktreeScope = "open" | "all";
+
+function parseBaseCheckArgs(argv: string[]): { base?: string; worktree?: WorktreeScope } {
+  const toks = argv.flatMap((t) => (t.startsWith("--worktree=") ? ["--worktree", t.slice("--worktree=".length)] : [t]));
+  const at = toks.indexOf("--worktree");
+  const scope = at === -1 ? undefined : toks[at + 1];
+  if (at !== -1 && scope !== "open" && scope !== "all") {
+    die(`chapter-review: --worktree takes "open" or "all" (got ${JSON.stringify(scope)})`, 2);
+  }
+  const rest = at === -1 ? toks : [...toks.slice(0, at), ...toks.slice(at + 2)];
+  if (rest.length > 1) {
+    die(`chapter-review: base-check takes one base (got ${rest.map((t) => `"${t}"`).join(", ")})`, 2);
+  }
+  return {
+    ...(rest.length === 1 ? { base: rest[0] } : {}),
+    ...(scope === "open" || scope === "all" ? { worktree: scope } : {}),
+  };
+}
 
 /**
  * base-check: is the review base fresh enough to diff against? Two ways it goes
@@ -17,8 +50,13 @@ import { earlierRounds, knownChapters, roundBase, roundCommits } from "./rounds.
  * the merge base that round's diff depends on settled. When the merge base moved
  * since the last round, that means replaying the previous head onto it, which
  * creates and pins a commit inside .git.
+ *
+ * With `--worktree` the round is a review of the working tree instead, taken as
+ * a snapshot commit inside .git. Its open-changes scope does not depend on the
+ * base, so that round is reported whatever the action.
  */
-export function cmdBaseCheck(argBase?: string): void {
+export function cmdBaseCheck(argv: string[] = []): void {
+  const { base: argBase, worktree } = parseBaseCheckArgs(argv);
   // A base starting with "-" would reach git as an option rather than a rev:
   // `base-check --help` otherwise renders a man page into baseSha and still
   // reports action "ok".
@@ -32,7 +70,12 @@ export function cmdBaseCheck(argBase?: string): void {
   const base = argBase ?? resolveBase();
   // Values are strings, booleans, numbers or undefined — never `any` — plus the
   // round object; the shape is documented in SKILL.md's base-check bullet.
-  const result: Record<string, string | number | boolean | null | undefined | NextRound> = { base };
+  const result: Record<string, string | number | boolean | null | undefined | NextRound | ParkedSummary[]> = { base };
+  const installed = priorStateForCarry().prior;
+  result.installed = installed === null ? undefined : (installed.mode ?? "branch");
+  result.openChanges = openChangeCount();
+  const parked = parkedReviews();
+  if (parked.length > 0) result.parked = parked;
   const emit = (): void => {
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
   };
@@ -50,6 +93,9 @@ export function cmdBaseCheck(argBase?: string): void {
   result.baseSha = baseSha;
   const mergeBase = gitTry("merge-base", base, "HEAD");
   result.mergeBase = mergeBase;
+  if (mergeBase !== undefined) {
+    result.branchCommits = Number(gitTry("rev-list", "--count", `${mergeBase}..HEAD`)) || 0;
+  }
 
   const leaf = branchLeaf(base);
 
@@ -120,7 +166,11 @@ export function cmdBaseCheck(argBase?: string): void {
         : `Base ${base} is current.`;
   }
   result.stale = result.action !== "ok";
-  if (result.action === "ok" && mergeBase !== undefined) result.round = nextRound(mergeBase);
+  if (mergeBase !== undefined && worktree !== undefined && (result.action === "ok" || worktree === "open")) {
+    result.round = worktreeRound(worktree, mergeBase);
+  } else if (mergeBase !== undefined && worktree === undefined && result.action === "ok") {
+    result.round = nextRound(mergeBase);
+  }
   emit();
 }
 
@@ -128,21 +178,31 @@ interface NextRound {
   number: number;
   /** False when the head has not moved, so `write` re-partitions this round. */
   new: boolean;
+  /** Present on a worktree round, which the draft carries as its mode. */
+  mode?: "worktree";
   fromSha: string;
+  /** The snapshot a worktree round reviews, which the draft carries as its headSha. */
+  headSha?: string;
   diff: string;
   replayConflicts?: string[];
   chapters: { id: string; title: string; rounds: number[]; files: string[] }[];
 }
 
-/** The round a `write` at this HEAD makes, and what it partitions. */
+/**
+ * The round a `write` at this HEAD makes, and what it partitions. When the
+ * installed review is a worktree review or another branch's, the review this
+ * branch goes on with is the one parked for it, which the write brings back.
+ */
 function nextRound(mergeBase: string): NextRound {
   const headSha = gitTry("rev-parse", "HEAD") ?? "";
   const head = gitTry("rev-parse", "--abbrev-ref", "HEAD") ?? "";
-  const { prior } = priorStateForCarry();
+  const { prior: installed } = priorStateForCarry();
+  const { prior, parkedAs } = continuedReview(installed, head, headSha);
   const { round, fresh, fromSha, replayConflicts } = roundBase(prior, head, headSha, mergeBase);
-  const sameBranch = prior !== null && prior.head === head;
-  const rounds = sameBranch ? [...earlierRounds(), prior] : [];
-  syncPins(new Set([...roundCommits(rounds), fromSha]));
+  const rounds = prior === null ? [] : [...earlierRounds(parkedAs === undefined ? undefined : parkedRoundsDir(parkedAs)), prior];
+  // The installed review keeps its pins until the write parks or drops it.
+  const keep = prior === installed ? rounds : installed === null ? [] : [...earlierRounds(), installed];
+  syncPins(new Set([...roundCommits(keep), fromSha]));
   return {
     number: round,
     new: fresh,
@@ -150,5 +210,31 @@ function nextRound(mergeBase: string): NextRound {
     diff: `git diff -M --unified=3 ${fromSha}..HEAD`,
     ...(replayConflicts.length > 0 ? { replayConflicts } : {}),
     chapters: knownChapters(rounds),
+  };
+}
+
+/**
+ * The worktree round a `write` makes now: one round over a snapshot of the
+ * working tree, from HEAD for the open changes alone or from the merge base for
+ * the branch with them. Re-running over an installed worktree review
+ * re-partitions it against a fresh snapshot.
+ */
+function worktreeRound(scope: WorktreeScope, mergeBase: string): NextRound {
+  const snapshot = snapshotWorktree();
+  if (snapshot === undefined) {
+    die("chapter-review: could not take a snapshot of the working tree (git add or commit-tree failed).");
+  }
+  const head = gitTry("rev-parse", "--abbrev-ref", "HEAD") ?? "";
+  const fromSha = scope === "open" ? (gitTry("rev-parse", "HEAD") ?? "") : mergeBase;
+  const { prior } = priorStateForCarry();
+  const same = prior?.mode === "worktree" && prior.head === head ? prior : null;
+  return {
+    number: 1,
+    new: !(same !== null && sameCommit(same.headSha, snapshot) && sameCommit(same.fromSha, fromSha)),
+    mode: "worktree",
+    fromSha,
+    headSha: snapshot,
+    diff: `git diff -M --unified=3 ${fromSha}..${snapshot}`,
+    chapters: knownChapters(same === null ? [] : [same]),
   };
 }

@@ -10,6 +10,7 @@
 import { cmdBaseCheck } from "./cmd-base-check.ts";
 import { cmdFocus, cmdShow } from "./cmd-read.ts";
 import { cmdIssue } from "./cmd-issue.ts";
+import { cmdParked } from "./cmd-parked.ts";
 import { cmdUncheck } from "./cmd-uncheck.ts";
 import { cmdWrite } from "./cmd-write.ts";
 
@@ -20,7 +21,11 @@ function usage(code: number): never {
       "",
       "  focus                     print what the reviewer is looking at",
       "  show                      print the current manifest",
-      "  base-check [base]         report whether the review base is fresh, and the next round",
+      "  base-check [base] [--worktree open|all]",
+      "                            report whether the review base is fresh, and the next round;",
+      "                            --worktree makes it a review of the working tree, the open",
+      "                            changes alone (open) or with the branch's commits (all)",
+      "  parked [drop <name>]      list the branch reviews a worktree review parked, or drop one",
       "  write [file] [--dry-run]  validate a partition draft, then install it (stdin if no file)",
       "                            --dry-run reports the counts and changes nothing",
       "  uncheck <flags>           clear a review checkmark (--path [--hunk]) so it re-reads",
@@ -49,7 +54,10 @@ export function main(argv: string[]): void {
       cmdShow();
       break;
     case "base-check":
-      cmdBaseCheck(rest[0]);
+      cmdBaseCheck(rest);
+      break;
+    case "parked":
+      cmdParked(rest);
       break;
     case "write":
       cmdWrite(rest);

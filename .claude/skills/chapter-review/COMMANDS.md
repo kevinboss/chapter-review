@@ -23,7 +23,8 @@ Each tool call runs the command below and returns its output, with `isError` set
 | --- | --- |
 | `focus` | `focus` |
 | `show` | `show` |
-| `base_check` | `base-check [base]` |
+| `base_check` | `base-check [base] [--worktree open\|all]`, with `worktree` |
+| `parked` | `parked [drop <name>]`, with `drop` |
 | `write` | `write [file] [--dry-run]`, with the draft as `draft` (an object) or `file`, and `dry_run` |
 | `uncheck` | `uncheck --path [--hunk]` |
 | `issue_add` | `issue add` |
@@ -57,8 +58,19 @@ A repo with no resolvable `HEAD` (empty, unborn branch, or `HEAD` pointing at a 
 It also settles `round`, `fromSha` and `replayConflicts` the way `base-check` reported them, so a draft needs none of the three: when the head has not moved since the last write, the draft re-partitions the current round, and when it has, the draft is the next round, which must partition `fromSha..HEAD`.
 Re-partitioning carries existing findings and the reviewer's checkmarks forward, pruning only entries whose path left the diff, so regeneration never loses review work.
 A new round instead keeps the previous one under `rounds/<n>/` with its checkmarks and starts unticked, takes along every open finding on a file it changes (re-anchored onto the new round, lines moved with the code), and leaves the other findings where they were; the report says so in a `round <n>: …` line, and its opening sentence counts the chapter ids reused from earlier rounds instead of chapters kept or dropped, since a chapter the round leaves out lives on in its round. Every other write says which round it re-partitioned, or that it started round 1 on the whole branch.
-On another branch it starts again at round 1 and drops the earlier rounds.
 The commits each round's diff is read from stay pinned under `refs/worktree/chapter-review/`, so a force-push cannot let gc take them.
+
+**Worktree drafts.** A draft with `mode: "worktree"` reviews a snapshot of the working tree, with `headSha` and `fromSha` copied from `base-check --worktree`.
+`write` takes the snapshot again and pins `headSha` to it, so a file edited since `base-check` shows up as a re-pinned `headSha` and usually as a coverage refusal.
+It keeps `fromSha` when that is HEAD or the merge base and refuses anything else, since that is the only choice the draft makes.
+A worktree review has one round: writing it again re-partitions it against the new snapshot, carrying its findings and checkmarks like any re-partition.
+Its report says `a review of the working tree: the open changes alone` or `… the branch with its open changes`, and its pin line names the snapshot instead of HEAD.
+
+**One review per checkout.** A write that displaces the installed review does not destroy it when it is a branch review.
+That review moves with everything it holds, its pins included, to `<git-dir>/chapter-review-parked/<name>/`, named after its branch (`/` becomes `-`), and the report says `parked the review of <branch> …`.
+A worktree review displaced by any write is dropped, since it is meant to be thrown away.
+A branch write whose branch has a parked review brings it back first and goes on with it, a new round if the head moved, and says `brought back the review of <branch> parked earlier`.
+So switching to another branch and back loses nothing, and neither does a worktree review in between.
 
 **Reading the report.** The summary opens with `Wrote <n> chapters across <n> files (<n> claims)`.
 A "claim" is one *enumerated hunk*, except that a whole-file entry (no `hunks` array) counts as exactly 1 however many hunks the diff holds for it; `unassigned` entries are claims too, and `files` counts distinct paths.
@@ -125,19 +137,35 @@ Use it on regeneration for a file whose bytes didn't change but whose correctnes
 
 ### base-check
 
-`chapter-review base-check [base]` — report whether the review base is fresh before you diff against it, and which review round the next `write` makes.
-It never fetches and never touches the worktree or a branch.
+`chapter-review base-check [base] [--worktree open|all]` — report whether the review base is fresh before you diff against it, and which review round the next `write` makes.
+It never fetches, and it changes neither the working tree nor any branch.
 Prints JSON with an `action` (`ok` / `switch` / `fetch` / `unresolved`); SKILL.md step 1 acts on it.
 Pass the base you resolved to check that exact ref, or omit it to let the command resolve the base the same way step 1 does.
 
 On `ok` only, since only then is the merge base settled, the JSON also carries `round`: `number`, `new` (false when the head has not moved since the last write, so the write re-partitions that round), `fromSha` and `diff` (the command whose output that round partitions), `replayConflicts` when there are any, and `chapters`, every chapter id the review has used with its latest title, the rounds it appears in and the files it held, for a new round to reuse.
 When the merge base moved since the last round, `fromSha` is the previous head replayed onto the new merge base: a commit `base-check` creates and pins inside `.git`, with the same id however often it is asked.
+While a worktree review or another branch's review is installed, `round` is computed against the review parked for this branch, which the next `write` brings back.
+
+`openChanges` counts the files with uncommitted changes, untracked ones included and ignored ones not, and `branchCommits` the commits between the merge base and HEAD. SKILL.md step 1 decides the mode from both.
+`installed` is `"branch"` or `"worktree"` for the review installed now, and absent when there is none.
+`parked` lists the parked reviews, each with `name`, `head`, `round`, `openFindings` and `branchExists`, and is absent when there are none.
+
+With `--worktree`, `round` describes a worktree review instead: `mode: "worktree"`, `number` 1, `fromSha` (HEAD for `open`, the merge base for `all`), `headSha`, the snapshot to review, and `diff`, which runs from `fromSha` to that snapshot rather than to HEAD.
+The snapshot is a commit on top of HEAD holding the working tree as it is, untracked files included. It is built in a copy of the index, so neither the index nor any file changes, and the same tree yields the same id.
+`new` is false only when a worktree review of this exact snapshot and `fromSha` is installed, and `chapters` then lists its ids.
+For `open` the round is reported whatever the `action`, since the open changes do not depend on the base; `all` reports it on `ok` only, like a branch round.
 
 **`action` is the only field that decides what you *do* about the base.**
 The rest is diagnostic context you may still read and report; step 1's `ok` branch has you mention a skipped remote check, which is reporting a field, not branching on it: `base`, `baseSha`, `mergeBase`, `message` (a prose version of the verdict), `remoteReachable`, `remoteTip`, plus `unfetched` (a boolean, always present once the base resolved, `true` is what drives a `fetch` verdict) and `suggestedBase` / `suggestedMergeBase` / `ahead`.
 Those three appear whenever a fresher local base exists, which is what a `switch` verdict is made of, but they can ride along on a `fetch` too when both conditions hold at once. Their presence is not the verdict; `action` is.
 On `unresolved` you get only `action` and `message`, plus `base` when a base was named but didn't resolve (when none resolved at all, `base` is absent from the JSON).
 `stale` is a convenience alias for `action !== "ok"` and cannot disagree with `action`; if you only read one field, read `action`.
+
+### parked
+
+`chapter-review parked` — print the parked reviews as JSON, the same list `base-check` carries as `parked`.
+`chapter-review parked drop <name>` — delete one, its pins included.
+A parked review comes back only through a write or a discard on its branch, so one whose `branchExists` is false waits forever; offer to drop those.
 
 ### focus and show
 
@@ -160,5 +188,6 @@ Nothing enforces this; sequential calls are the contract.
 - **A `hunks` object and a `--hunk` flag are the same four numbers in two spellings.** The flag takes them as a bare comma-separated list in schema order, so `--hunk 7,9,8,14` names the range a draft spells `{ "oldStart": 7, "oldLines": 9, "newStart": 8, "newLines": 14 }`.
 - **`issues` and `issueSeq` are the CLI's, not yours.** `chapter-review issue …` assigns ids, infers the owning chapter and preserves both across regeneration; `write` refuses a draft carrying `issues` at all. The durable anchor is `path` (+ `hunk`), so `chapterId` re-maps itself when a path moves chapters, and the id is renumbered with it: an id's chapter part must agree with its `chapterId`, and `validate.ts` refuses a manifest where it doesn't.
 - **Chapter ids start at `ch-1`.** `ch-0` is refused: 0 is the issue sequence for findings no chapter owns, which is what `iss-0.N` and `issueSeq["0"]` refer to.
+- **`mode`, `headSha` and `fromSha` of a worktree review come from `base-check --worktree`.** Copy them from its `round` into the draft; `round` itself stays out, as in every draft.
 - **Earlier rounds are kept, not rewritten.** `<git-dir>/chapter-review/rounds/<n>/chapters.json` holds round n's partition, without findings, which all stay in the current manifest with their `round`; `rounds/<n>/progress.json` holds the checkmarks made in it. `show` prints the current round only.
 - **Checkmarks are a separate document you never author**: `<git-dir>/chapter-review/progress.json`, owned by the extension, read by the CLI, and cleared only by `uncheck`. A unit reads as checked while its stored digest matches current content, which is what re-opens a file whose bytes moved and leaves an untouched one ticked.

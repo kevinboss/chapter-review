@@ -266,6 +266,10 @@ function structuralErrors(m: unknown): string[] {
     }
   }
   if (!isRound(m.round)) push("round must be an integer from 1");
+  if (m.mode !== undefined && m.mode !== "worktree") {
+    push(`mode, when present, must be "worktree" (got ${JSON.stringify(m.mode)})`);
+  }
+  if (m.mode === "worktree" && m.round !== 1) push("a worktree review has one round, so round must be 1");
   if (
     m.replayConflicts !== undefined &&
     (!isArray(m.replayConflicts) || !m.replayConflicts.every((p) => typeof p === "string"))
@@ -301,7 +305,7 @@ function structuralErrors(m: unknown): string[] {
   if (issues !== undefined && !isArray(issues)) push("issues, when present, must be an array");
   noExtraKeys(
     m,
-    ["version", "round", "base", "head", "mergeBase", "fromSha", "headSha", "replayConflicts", "generatedAt", "summary", "chapters", "unassigned", "issues", "issueSeq"],
+    ["version", "mode", "round", "base", "head", "mergeBase", "fromSha", "headSha", "replayConflicts", "generatedAt", "summary", "chapters", "unassigned", "issues", "issueSeq"],
     "manifest",
     push
   );

@@ -136,13 +136,12 @@ function keepOldVersions(tree: string, oldHead: string, paths: string[]): string
   }
 }
 
-/** The archived rounds, oldest first; unreadable ones are skipped. */
-export function earlierRounds(): Manifest[] {
-  const dir = roundsDir();
+/** The archived rounds in `dir`, oldest first; unreadable ones are skipped. */
+export function earlierRounds(dir = roundsDir()): Manifest[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => /^[1-9][0-9]*$/.test(name))
-    .map((name) => readManifestIfValid(roundManifestPath(Number(name))))
+    .map((name) => readManifestIfValid(path.join(dir, name, "chapters.json")))
     .filter((m): m is Manifest => m !== null)
     .sort((a, b) => a.round - b.round);
 }

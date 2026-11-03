@@ -3,7 +3,8 @@
 // same chapter-review/ folder.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { copyFileSync, existsSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { die, errorMessage } from "./util.ts";
 
@@ -40,7 +41,16 @@ export function gitDir(): string {
  * reported the in-repo path, which is both an escape and a lie.
  */
 export function protocolDir(): string {
-  const dir = path.join(gitDir(), "chapter-review");
+  return toolDir("chapter-review");
+}
+
+/** Where displaced branch reviews wait, one folder each: `<git-dir>/chapter-review-parked/`. */
+export function parkedRoot(): string {
+  return toolDir("chapter-review-parked");
+}
+
+function toolDir(name: string): string {
+  const dir = path.join(gitDir(), name);
   if (existsSync(dir)) {
     const real = realpathSync(dir);
     const inside = realpathSync(gitDir()) + path.sep;
@@ -73,6 +83,8 @@ export const roundProgressPath = (round: number): string =>
 // Per worktree: gc in any worktree honours these refs, and two worktrees
 // reviewing different branches cannot release each other's.
 export const PIN_PREFIX = "refs/worktree/chapter-review/";
+/** A parked review's pins, under `<prefix><name>/`. */
+export const PARKED_PIN_PREFIX = "refs/worktree/chapter-review-parked/";
 
 /**
  * Keep exactly `commits` reachable through pin refs. A round's head stops being
@@ -144,6 +156,63 @@ export function fileAt(commit: string, p: string): string | undefined {
   } catch (e) {
     die(`chapter-review: could not read ${p} at ${short(commit) ?? commit}: ${errorMessage(e)}`);
   }
+}
+
+/**
+ * The working tree as a commit on top of HEAD: staged, unstaged and untracked
+ * files, minus what .gitignore excludes. Built in a copy of the index, so the
+ * real one and the files are untouched. Identity and dates are fixed, so the
+ * same tree on the same HEAD yields the same id: `base-check --worktree` prints
+ * it before the partition is built and `write` arrives at it again.
+ */
+export function snapshotWorktree(): string | undefined {
+  const head = gitTry("rev-parse", "--verify", "--quiet", "HEAD^{commit}");
+  const top = gitTry("rev-parse", "--show-toplevel");
+  if (head === undefined || top === undefined) return undefined;
+  const realIndex = path.resolve(top, gitTry("rev-parse", "--git-path", "index") ?? "");
+  const index = path.join(tmpdir(), `chapter-review-snapshot-${process.pid.toString(36)}-${process.hrtime.bigint().toString(36)}`);
+  const env = { ...process.env, GIT_INDEX_FILE: index };
+  const run = (args: string[], extra: NodeJS.ProcessEnv = env): string =>
+    execFileSync("git", args, {
+      cwd: top,
+      encoding: "utf8",
+      env: extra,
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: GIT_MAX_BUFFER,
+    }).trim();
+  try {
+    // A copy keeps the real index's stat cache, so only edited files are hashed.
+    if (existsSync(realIndex)) copyFileSync(realIndex, index);
+    else run(["read-tree", head]);
+    run(["add", "--all"]);
+    const tree = run(["write-tree"]);
+    const when = run(["log", "-1", "--format=%cI", head]);
+    return run(["commit-tree", tree, "-p", head, "-m", `chapter-review: working tree on ${head}`], {
+      ...env,
+      GIT_AUTHOR_NAME: "chapter-review",
+      GIT_AUTHOR_EMAIL: "chapter-review@localhost",
+      GIT_AUTHOR_DATE: when,
+      GIT_COMMITTER_NAME: "chapter-review",
+      GIT_COMMITTER_EMAIL: "chapter-review@localhost",
+      GIT_COMMITTER_DATE: when,
+    });
+  } catch {
+    return undefined;
+  } finally {
+    rmSync(index, { force: true });
+  }
+}
+
+/** Files with changes git has not committed, untracked ones included and ignored ones not. */
+export function openChangeCount(): number {
+  const out = gitTry("status", "--porcelain=v1", "--untracked-files=all") ?? "";
+  return out === "" ? 0 : out.split("\n").length;
+}
+
+/** The checked-out branch, or undefined on a detached HEAD. */
+export function currentBranch(): string | undefined {
+  const name = gitTry("rev-parse", "--abbrev-ref", "HEAD");
+  return name === "HEAD" ? undefined : name;
 }
 
 /**
