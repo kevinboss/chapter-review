@@ -166,15 +166,33 @@ const TOOLS: Tool[] = [
   {
     name: "base_check",
     description:
-      "Whether the review base is fresh, as JSON with an `action`, and on `ok` the review round the next `write` makes. Never fetches; may create and pin a replayed base commit inside .git. Same as `chapter-review base-check [base]`.",
+      "Whether the review base is fresh, as JSON with an `action`, and on `ok` the review round the next `write` makes. Never fetches; may create and pin a replayed base commit, or a snapshot of the working tree, inside .git. Same as `chapter-review base-check [base] [--worktree open|all]`.",
     readOnly: false,
     properties: {
       base: { type: "string", description: "The base you resolved. Omit to let the command resolve it." },
+      worktree: {
+        type: "string",
+        enum: ["open", "all"],
+        description: "Review the working tree instead: the open changes alone, or with the branch's commits.",
+      },
     },
     required: [],
     invocation: (a) => {
       const base = optString(a, "base");
-      return { args: base === undefined ? ["base-check"] : ["base-check", base] };
+      const worktree = optString(a, "worktree");
+      return { args: ["base-check", ...(base === undefined ? [] : [base]), ...flag("--worktree", worktree)] };
+    },
+  },
+  {
+    name: "parked",
+    description:
+      "The branch reviews a worktree review or another branch's review displaced, as JSON, or drop one by name. Same as `chapter-review parked [drop <name>]`.",
+    readOnly: false,
+    properties: { drop: { type: "string", description: "Name of the parked review to delete." } },
+    required: [],
+    invocation: (a) => {
+      const name = optString(a, "drop");
+      return { args: name === undefined ? ["parked"] : ["parked", "drop", name] };
     },
   },
   {

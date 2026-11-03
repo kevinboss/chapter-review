@@ -89,7 +89,7 @@ test("initialize answers with tools and the protocol version the client asked fo
   const listed = list.result?.tools ?? [];
   assert.deepEqual(
     listed.map((t) => t.name),
-    ["focus", "show", "base_check", "write", "uncheck", "issue_add", "issue_set", "issue_update", "issue_list"]
+    ["focus", "show", "base_check", "parked", "write", "uncheck", "issue_add", "issue_set", "issue_update", "issue_list"]
   );
   for (const t of listed) {
     assert.ok(t.inputSchema.required.includes("repo"), `${t.name} must require repo`);

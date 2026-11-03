@@ -1,6 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { die, isArray, isRecord, tryReadJson } from "./util.ts";
-import { gitOk, gitTry, manifestPath, sameCommit, short, syncPins } from "./git.ts";
+import { gitOk, gitTry, manifestPath, sameCommit, short, snapshotWorktree, syncPins } from "./git.ts";
+import {
+  continuedReview,
+  discardActive,
+  park,
+  parkedProgressPath,
+  parkedReview,
+  parkedRoundsDir,
+  parkName,
+  restore,
+} from "./park.ts";
 import {
   carryIssues,
   carryReviewed,
@@ -41,7 +51,8 @@ const str = (draft: Draft, key: string): string | undefined =>
 export function repinCommits(draft: unknown): string[] {
   if (!isRecord(draft)) return [];
   const notes: string[] = [];
-  const liveHead = gitTry("rev-parse", "HEAD");
+  const worktree = draft.mode === "worktree";
+  const liveHead = worktree ? snapshotWorktree() : gitTry("rev-parse", "HEAD");
   if (liveHead) {
     const drafted = str(draft, "headSha");
     if (drafted && !sameCommit(drafted, liveHead)) {
@@ -74,10 +85,15 @@ export function repinCommits(draft: unknown): string[] {
   // replayed base is the same commit `base-check` printed.
   const headSha = str(draft, "headSha");
   const mergeBase = str(draft, "mergeBase");
-  if (headSha !== undefined && mergeBase !== undefined) {
+  if (worktree && mergeBase !== undefined) {
+    draft.round = 1;
+    draft.fromSha = worktreeFrom(str(draft, "fromSha"), mergeBase);
+    draft.replayConflicts = undefined;
+  } else if (headSha !== undefined && mergeBase !== undefined) {
+    const head = str(draft, "head") ?? "";
     const { round, fromSha, replayConflicts } = roundBase(
-      priorStateForCarry().prior,
-      str(draft, "head") ?? "",
+      continuedReview(priorStateForCarry().prior, head, headSha).prior,
+      head,
       headSha,
       mergeBase
     );
@@ -87,6 +103,21 @@ export function repinCommits(draft: unknown): string[] {
   }
   draft.generatedAt = new Date().toISOString();
   return notes;
+}
+
+/**
+ * A worktree review's left side, which the draft picks and `write` only checks:
+ * HEAD for the open changes alone, the merge base for the branch with them.
+ */
+function worktreeFrom(drafted: string | undefined, mergeBase: string): string {
+  const head = gitTry("rev-parse", "HEAD");
+  if (head !== undefined && sameCommit(drafted, head)) return head;
+  if (sameCommit(drafted, mergeBase)) return mergeBase;
+  die(
+    "chapter-review: a worktree draft's fromSha is HEAD (the open changes alone) or the merge base " +
+      "(the branch with them), copied from `base-check --worktree`" +
+      (drafted === undefined ? "; the draft has none." : `; ${short(drafted) ?? drafted} is neither, so HEAD moved since.`)
+  );
 }
 
 /**
@@ -147,6 +178,14 @@ function assertDraftBelongsHere(draft: Draft): void {
     ? gitTry("rev-parse", "--verify", "--quiet", `${headSha}^{commit}`)
     : undefined;
   if (literalSha && headShaHere === liveHead) {
+    return;
+  }
+  // A worktree draft's headSha is the snapshot, a commit made on top of HEAD.
+  if (
+    str(draft, "mode") === "worktree" &&
+    headShaHere !== undefined &&
+    gitTry("rev-parse", "--verify", "--quiet", `${headShaHere}^1`) === liveHead
+  ) {
     return;
   }
   // Vetoes. A SHA the draft carries that this repository has never contained is
@@ -310,7 +349,9 @@ function assertCoversDiff(manifest: Manifest): boolean {
   // regenerating without noticing.
   if (diffText.trim() === "") {
     die(
-      manifest.round === 1
+      manifest.mode === "worktree"
+        ? "chapter-review: the working tree has no open changes to review, so there is nothing to partition."
+        : manifest.round === 1
         ? `chapter-review: ${manifest.head} has no changes against ${manifest.base}, ` +
             "so there is nothing to partition.\n" +
             "  Check you are on the branch you meant to review, and that the base is right."
@@ -335,6 +376,11 @@ function assertCoversDiff(manifest: Manifest): boolean {
   process.exit(1);
 }
 
+function openFindings(m: Manifest): string {
+  const n = issuesOf(m).filter((i) => i.status !== "resolved").length;
+  return `${String(n)} open finding${n === 1 ? "" : "s"}`;
+}
+
 /** The read-modify-write half of `write`, run under the manifest lock. */
 function installDraft(
   asManifest: Manifest,
@@ -343,32 +389,33 @@ function installDraft(
   coverageChecked: boolean
 ): void {
   const priorExisted = existsSync(manifestPath());
-  const { prior, fromBackup } = priorStateForCarry();
+  const { prior: installed, fromBackup } = priorStateForCarry();
   if (priorExisted && fromBackup) {
     console.error(
       "chapter-review: the previous manifest was unreadable; carrying findings and " +
         `checkmarks forward from the backup (${manifestPath()}.bak) instead.`
     );
-  } else if (priorExisted && !prior) {
+  } else if (priorExisted && !installed) {
     console.error(
       "chapter-review: the previous manifest was unreadable or invalid, and the backup " +
         "could not be used either; installing the new partition. Findings could not be " +
         "carried forward; checkmarks are read separately and may still survive."
     );
   }
-  // One manifest per repository, so writing while standing on another branch
-  // replaces that branch's review outright. Legitimate (you moved on), but it
-  // took every chapter and finding with it and said nothing.
-  if (prior && prior.head !== asManifest.head) {
-    console.error(
-      `chapter-review: this replaces the review of "${prior.head}" ` +
-        `(${prior.chapters.length} chapters, ${issuesOf(prior).length} findings) ` +
-        `with one for "${asManifest.head}". The previous one is only in ${manifestPath()}.bak.`
-    );
-  }
+  // One review is installed per checkout. A branch review this write displaces
+  // is parked under its branch's name, a worktree review is dropped, and a
+  // branch review parked earlier comes back for a write of its branch.
+  const continues =
+    installed !== null && installed.head === asManifest.head && installed.mode === asManifest.mode;
+  const parking = installed !== null && !continues && installed.mode === undefined;
+  const dropping = installed !== null && !continues && installed.mode === "worktree";
+  const restoreName = asManifest.mode === undefined && !continues ? parkName(asManifest.head, asManifest.headSha) : undefined;
+  const restored = restoreName === undefined ? null : parkedReview(restoreName);
+  const restoring = restoreName !== undefined && restored !== null;
+  const prior = continues ? installed : restored;
   const sameBranch = prior !== null && prior.head === asManifest.head;
   const newRound = sameBranch && asManifest.round !== prior.round;
-  const earlier = sameBranch ? earlierRounds() : [];
+  const earlier = !sameBranch ? [] : restoring ? earlierRounds(parkedRoundsDir(restoreName)) : earlierRounds();
   const roundOf = (n: number): Manifest | null =>
     prior !== null && n === prior.round ? prior : (earlier.find((m) => m.round === n) ?? null);
 
@@ -415,7 +462,13 @@ function installDraft(
   // They live in progress.json; the manifest never carries them again. A new
   // round starts unticked: what the reviewer ticked belongs to the round they
   // ticked it in, and is archived with it.
-  const priorReviewed: ReviewedUnit[] = newRound ? [] : readProgress();
+  const priorReviewed: ReviewedUnit[] = newRound
+    ? []
+    : restoring
+      ? readProgress(parkedProgressPath(restoreName))
+      : parking || dropping
+        ? []
+        : readProgress();
   const {
     kept: carriedReviewed,
     gone: reviewedGone,
@@ -452,7 +505,9 @@ function installDraft(
       reviewedGone > 0 && `${reviewedGone} checkmarks dropped (path left the diff)`,
       reviewedMerged > 0 && `${reviewedMerged} checkmarks folded into a merged hunk`,
     ].filter((c): c is string => typeof c === "string");
-    const opening = `${dryRun ? "Would write" : "Wrote"} ${stats.chapters} chapters across ${stats.files} files (${stats.hunks} claims)`;
+    const opening =
+      `${dryRun ? "Would write" : "Wrote"} ${stats.chapters} chapter${stats.chapters === 1 ? "" : "s"} ` +
+      `across ${stats.files} file${stats.files === 1 ? "" : "s"} (${stats.hunks} claim${stats.hunks === 1 ? "" : "s"})`;
     console.log(`${[opening, ...clauses].join(", ")}.`);
     console.log(dryRun ? `  would write ${dest} (--dry-run: nothing changed)` : `  wrote ${dest}`);
     if (newRound) {
@@ -476,11 +531,36 @@ function installDraft(
             "this round's diff, since a fix can land on new lines."
         );
       }
+    } else if (asManifest.mode === "worktree") {
+      const scope = sameCommit(asManifest.fromSha, gitTry("rev-parse", "HEAD"))
+        ? "the open changes alone"
+        : "the branch with its open changes";
+      console.log(`  a review of the working tree: ${scope}${sameBranch ? ", re-partitioned" : ""}`);
     } else {
       console.log(
         sameBranch
           ? `  round ${String(asManifest.round)}, re-partitioned`
           : `  round ${String(asManifest.round)}: the whole branch`
+      );
+    }
+    if (parking) {
+      console.log(
+        `  ${dryRun ? "would park" : "parked"} the review of ${installed.head} (round ${String(installed.round)}, ` +
+          `${openFindings(installed)}) as "${parkName(installed.head, installed.headSha)}"; ` +
+          `the next write of a review of ${installed.head} brings it back` +
+          (asManifest.mode === "worktree" ? ", and so does discarding this working-tree review in the extension" : "")
+      );
+    }
+    if (dropping) {
+      console.log(
+        `  ${dryRun ? "would drop" : "dropped"} the working-tree review of ${installed.head} ` +
+          `(${openFindings(installed)})`
+      );
+    }
+    if (restoring) {
+      console.log(
+        `  ${dryRun ? "would bring back" : "brought back"} the review of ${asManifest.head} parked earlier ` +
+          `(round ${String(restored.round)}, ${openFindings(restored)})`
       );
     }
     if (asManifest.replayConflicts !== undefined) {
@@ -498,7 +578,11 @@ function installDraft(
     );
     const { headSha, mergeBase } = asManifest;
     if (headSha) {
-      console.log(`  pinned to HEAD ${short(headSha)} (mergeBase ${short(mergeBase)})`);
+      console.log(
+        asManifest.mode === "worktree"
+          ? `  pinned to the working-tree snapshot ${short(headSha)} (mergeBase ${short(mergeBase)})`
+          : `  pinned to HEAD ${short(headSha)} (mergeBase ${short(mergeBase)})`
+      );
     }
     if (carriedReviewed.length > 0) {
       console.log(
@@ -567,17 +651,23 @@ function installDraft(
   };
 
   const finalManifest = withIssues(asManifest, kept);
+  // The validation installManifest would run, done before anything is parked so
+  // a refused write moves nothing, and so --dry-run refuses what a write refuses.
+  const check = validateManifest(finalManifest);
+  if (!check.ok) {
+    console.error("chapter-review: change refused, the manifest would be invalid:");
+    for (const e of check.errors) console.error(`  - ${e}`);
+    process.exit(1);
+  }
   if (dryRun) {
-    // The validation installManifest would run, so --dry-run refuses what a real
-    // write refuses.
-    const check = validateManifest(finalManifest);
-    if (!check.ok) {
-      console.error("chapter-review: change refused, the manifest would be invalid:");
-      for (const e of check.errors) console.error(`  - ${e}`);
-      process.exit(1);
-    }
     report(check.stats, manifestPath());
     return;
+  }
+  if (parking) park(installed);
+  if (restoring) {
+    restore(restoreName);
+  } else if (dropping) {
+    discardActive();
   }
   installManifest(finalManifest, report);
   // After the manifest lands, so a refused install leaves the earlier rounds and

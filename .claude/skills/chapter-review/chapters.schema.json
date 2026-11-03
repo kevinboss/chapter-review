@@ -11,6 +11,10 @@
       "const": 2,
       "description": "Contract version. Consumers must reject manifests with a version they don't know."
     },
+    "mode": {
+      "const": "worktree",
+      "description": "Present on a review of the working tree: headSha is a snapshot of it taken on top of HEAD, fromSha is HEAD or mergeBase, and round is always 1. The branch review it displaced is parked under <git-dir>/chapter-review-parked/ and comes back when this one is discarded. Absent on a review of the branch's commits."
+    },
     "round": {
       "type": "integer",
       "minimum": 1,
