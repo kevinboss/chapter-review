@@ -4,6 +4,17 @@ All notable changes to the Chapter Review extension are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2026-11-11
+
+### Added
+- Review uncommitted changes. `/chapter-review` can split the open changes in the working tree into chapters without committing them first.
+  The review reads a snapshot kept inside `.git`, so fixing findings in the real files does not move it. It is meant to be thrown away once the findings are fixed, so it gets one round and no history.
+- The Chapters view shows a working-tree review as the snapshot it reads, with a row counting the files edited since, refreshed on save.
+- A branch review displaced by a working-tree review is parked under its branch name instead of replaced, and comes back when the working-tree review is discarded. `chapter-review parked` lists and drops parked reviews.
+
+### Changed
+- `/chapter-review` picks between the branch's commits and the open changes on its own when only one of them exists or the conversation makes the choice clear. `/chapter-review open`, `branch` or `all` picks it directly. It asks only when nothing settles it.
+
 ## [0.14.0] - 2026-10-26
 
 ### Added
@@ -217,6 +228,7 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Skill installer: the extension bundles the chapter-review skill and installs
   it into your coding agent, consent-gated.
 
+[0.16.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.16.0
 [0.14.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.14.0
 [0.12.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.12.0
 [0.10.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.10.0
