@@ -37,10 +37,11 @@ Commands: `write [file] [--dry-run]` installs a partition draft, `issue add|set|
    - `"fetch"` — `origin/<branch>` is unfetched. Ask the user, in prose, whether to `git fetch` and regenerate against the fresh fork point or proceed against the stale base. Fetch only on their go-ahead.
    - `"unresolved"` — nothing resolved. Don't re-run the resolution above; that chain is what failed. Ask the user in prose, listing local branches that aren't `head`. If there genuinely is no other branch, say so and use the root commit (`git rev-list --max-parents=0 HEAD`) as `mergeBase`, recording that `base` so the reviewer sees what the diff was taken against.
 
-   **Then choose what to review**, from `openChanges` (files with uncommitted changes, untracked ones included) and `branchCommits` (the branch's own commits) in the same answer:
+   **Then choose what to review**, from `openChanges` (files with uncommitted changes, untracked ones included) and `branchCommits` (the branch's own commits) in the same answer. An argument on the invocation settles it: `open` reviews the open changes, `branch` the branch's commits, `all` both together. When the side it names is empty, say so rather than reviewing the other one. Without an argument:
    - `openChanges` is 0: review the branch, as the rest of these steps describe.
    - `openChanges` is above 0 and `branchCommits` is 0, as on `main` or a branch with no commits of its own: a branch review would be empty, so review the open changes without asking.
-   - Both are above 0: ask the user in prose which review they want, the branch's commits only, the open changes only, or both together.
+   - Both are above 0 and the conversation already answers it: choose without asking, and name the choice in your reply so the user can redirect it. The common case is a session that wrote the open changes itself and has not committed them yet, which wants the open changes.
+   - Both are above 0 and nothing in the conversation points either way: ask the user in prose which review they want, the branch's commits only, the open changes only, or both together.
 
    For the open changes run `base-check --worktree open`, for both together `base-check --worktree all`, and take `round` from that answer instead. Then follow [Reviewing the working tree](#reviewing-the-working-tree) alongside the steps below. An installed worktree review (`installed: "worktree"`) changes nothing in this choice: the open changes again re-partition it over a fresh snapshot, and the branch drops it and brings back the parked branch review.
    When `parked` lists a review whose `branchExists` is false, nothing will ever bring it back: name it in your reply and offer to drop it with `chapter-review parked drop <name>`.
