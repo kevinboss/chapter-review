@@ -13,52 +13,36 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-This extension renders a chapter manifest as a reviewable tree in a dedicated **Chapter Review** side bar, with chapter-scoped diffs and per-hunk review progress.
-
-The manifest is produced by the companion **chapter-review skill**, which you run in your coding agent (Claude Code today). The skill partitions the branch's diff into chapters and writes it to `<git-dir>/chapter-review/chapters.json` (inside `.git`, so your working tree stays clean). This extension is the review surface; it does not generate the manifest itself.
+Chapter Review renders a chapter manifest in its own side bar as a tree of
+chapters, files, and hunks with chapter-scoped diffs and per-hunk checkmarks.
+The companion `chapter-review` skill in Claude Code partitions the branch diff
+and writes the manifest inside `.git`, keeping your working tree clean. This
+extension displays the review; it does not generate the manifest itself.
 
 <!--
-TODO(screenshot): add a hero screenshot or GIF of the Chapter Review side bar here.
-Suggested capture: the Chapters view expanded (chapters → files → hunks) next to an
-open chapter-scoped diff, with a couple of hunks ticked so the progress counter shows.
-Save it under extension/media/ (e.g. media/screenshot.png) and reference it as:
+TODO(screenshot): add a hero screenshot or GIF of the Chapter Review side bar.
+Suggested capture: the Chapters view expanded (chapters -> files -> hunks) next
+to an open chapter-scoped diff, with a couple of hunks ticked so the progress
+counter shows. Save it under extension/media/ (e.g. media/screenshot.png) and
+reference it as:
 ![Chapter Review](media/screenshot.png)
 Marketplace renders repo-relative image paths from the packaged README.
 -->
 
-## Requirements
+Install the extension from the Marketplace or from a terminal:
 
-- A git repository open in VSCode, with `git` on your PATH.
-- A coding agent that loads Claude Code skills (Claude Code today), to generate the manifest.
+```bash
+code --install-extension kevinboss.chapter-review
+```
 
-## Getting started
+Then run `Chapter Review: Install Skill` from the Command Palette and restart
+Claude Code (requires `git` and Node.js 22.18 or newer on `PATH`). See the
+[installation docs](https://github.com/kevinboss/chapter-review/blob/main/docs/installation.md)
+for manual setup and pre-release builds.
 
-1. **Install the skill.** This extension ships the chapter-review skill inside it. Run **Chapter Review: Install Skill** from the Command Palette, or click **Install the skill** in the empty Chapters view, then choose where it goes: `~/.claude/skills/` for every repository, or just the current workspace. The same step registers the skill's MCP server with Claude Code, so the agent can call the review commands as tools; this needs the `claude` command on PATH, and without it the skill still installs and you get the command to run yourself. Restart your coding agent afterward so it loads the skill. The extension prompts you to update whenever it bundles a newer skill version.
-2. In your coding agent, run the chapter-review skill on the branch you want to review. It writes the chapter manifest.
-3. Click the **Chapter Review** icon in the activity bar. The **Chapters** view lists the chapters; expand one to see its files and hunks.
-4. Click a file or hunk to open its diff, scoped to that chapter. Tick the checkboxes as you review; progress is saved per hunk. Tick a chapter or folder to complete everything beneath it at once, and tick an issue to mark it resolved.
-
-If the view says "No chapter manifest found", the skill hasn't generated one for this repo yet.
-
-## Features
-
-- **Chapters** view in its own activity-bar container: chapters → files → hunks, with an Unassigned bucket for quarantined noise (lockfiles, generated code, autoformat).
-- Numbered rows: a chapter reads `2 · <title>` and its findings `2.1`, `2.2`, because findings are numbered inside their chapter. Say "chapter 2" or "2.1" to your agent rather than pasting a title, and the skill resolves it to `ch-2` or `iss-2.1`. The full id sits in the row's tooltip.
-- Tree/list toggle for the files inside a chapter, mirroring the native git views.
-- Chapter-scoped diffs: a file or hunk opens a diff showing only that chapter's changes, even when other chapters touch the same file. The cursor lands on the first changed line.
-- Review progress via native checkboxes on files and hunks, keyed by hunk position so it survives manifest regeneration for unchanged hunks. Ticking a chapter, folder or the Unassigned root completes every file beneath it in one step. Per-chapter counts plus an overall "N of M reviewed".
-- Issues carry the same checkbox: ticking one marks it resolved (written back to the manifest for the skill to read), so completing a finding works like completing a file.
-- Clicking a finding opens its chapter's diff on the line the finding is about, or on its range's first change when it names no line.
-- A finding on a file the branch left wrong without changing it (a stale doc, a forgotten caller) sits under the chapter of the change that caused it and reads "outside the diff". Clicking it opens that file as it stands at the reviewed commit, on the finding's line.
-- Review rounds: when the author pushes fixes and the skill runs again, the new round holds only what changed since the last one, in a drawer of its own above the earlier rounds, which stay as you left them with their checkmarks. A round's diff runs from the previous round's head, replayed onto the new base when the author rebased, so you read the fixups and not the whole branch again; a file row offers the whole branch's diff next to it. Open findings on files the fixups touched come along into the new round.
-- Auto-refreshes when the skill regenerates the manifest.
-- Staleness detection: the view flags when the branch has moved past the commit the chapters were generated against, so you know to regenerate the manifest.
-
-## Known limitations
-
-- Staleness is detected at the branch level (the recorded head moved). It does not yet recompute which individual hunks changed, so a stale manifest is flagged rather than partially updated.
-- Multi-root workspaces: only the first folder is considered.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Open a git repository in VS Code and ask Claude Code to run the
+`chapter-review` skill on the current branch. Open the Chapters view from the
+activity bar, expand a chapter, and click a file or hunk to inspect its
+chapter-scoped diff. Tick checkboxes as you review. See the
+[extension reference](https://github.com/kevinboss/chapter-review/blob/main/docs/extension.md)
+for every feature and known limitation.
