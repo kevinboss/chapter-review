@@ -4,6 +4,11 @@ All notable changes to the Chapter Review extension are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2] - 2026-11-26
+
+### Changed
+- Shortened the Marketplace page to what Chapter Review is and how to use it, with the license at the bottom. The full feature reference stays in the repository's docs.
+
 ## [0.16.1] - 2026-11-26
 
 ### Changed
@@ -233,6 +238,7 @@ project uses [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - Skill installer: the extension bundles the chapter-review skill and installs
   it into your coding agent, consent-gated.
 
+[0.16.2]: https://github.com/kevinboss/chapter-review/releases/tag/v0.16.2
 [0.16.1]: https://github.com/kevinboss/chapter-review/releases/tag/v0.16.1
 [0.16.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.16.0
 [0.14.0]: https://github.com/kevinboss/chapter-review/releases/tag/v0.14.0
